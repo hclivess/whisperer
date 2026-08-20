@@ -36,6 +36,19 @@ def arch_tag() -> str:
     return {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine, machine)
 
 
+def metadata_flags(*names: str) -> list:
+    """--include-distribution-metadata only for distributions that are actually installed"""
+    from importlib.metadata import distribution, PackageNotFoundError
+    flags = []
+    for name in names:
+        try:
+            distribution(name)
+        except PackageNotFoundError:
+            continue
+        flags.append(f"--include-distribution-metadata={name}")
+    return flags
+
+
 def nuitka_command() -> list:
     cmd = [
         sys.executable, "-m", "nuitka",
@@ -52,17 +65,9 @@ def nuitka_command() -> list:
         "--include-package=onnxruntime",
         "--include-package-data=onnxruntime",
         "--include-package=av",
-        "--include-distribution-metadata=faster-whisper",
-        "--include-distribution-metadata=ctranslate2",
-        "--include-distribution-metadata=tokenizers",
-        "--include-distribution-metadata=huggingface_hub",
-        "--include-distribution-metadata=onnxruntime",
-        "--include-distribution-metadata=av",
-        "--include-distribution-metadata=tqdm",
-        "--include-distribution-metadata=numpy",
-        "--include-distribution-metadata=requests",
-        "--include-distribution-metadata=filelock",
-        "--include-distribution-metadata=packaging",
+        *metadata_flags("faster-whisper", "ctranslate2", "tokenizers", "huggingface_hub",
+                        "onnxruntime", "av", "tqdm", "numpy", "requests", "httpx", "filelock", "packaging",
+                        "pyyaml", "typing_extensions", "fsspec"),
         f"--output-dir={BUILD_DIR}",
         f"--output-filename={APP_NAME}",
         "--include-data-files=icon.ico=icon.ico",
