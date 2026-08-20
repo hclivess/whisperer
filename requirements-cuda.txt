@@ -1,0 +1,5 @@
+# GPU acceleration for faster-whisper (NVIDIA, CUDA 12 + cuDNN 9 runtime libraries, ~1 GB)
+#   pip install -r requirements-cuda.txt
+-r requirements.txt
+nvidia-cublas-cu12
+nvidia-cudnn-cu12>=9

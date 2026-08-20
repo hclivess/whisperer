@@ -57,6 +57,7 @@ DEFAULT_SETTINGS = {
     "model_dir": "",
     "whisper_cli_path": "",
     "cpu_threads": 0,
+    "cuda_lib_dir": "",
     # Transcription
     "language": "en",
     "task": "transcribe",

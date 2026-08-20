@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from utils.ffmpeg_utils import find_binary
+from utils.cuda_utils import setup_cuda
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -55,24 +56,55 @@ def faster_whisper_available() -> bool:
         return False
 
 
-def cuda_available() -> bool:
+def cuda_available(cuda_lib_dir: str = "") -> bool:
     try:
+        setup_cuda(cuda_lib_dir)
         import ctranslate2
         return ctranslate2.get_cuda_device_count() > 0
     except Exception:
         return False
 
 
-def _resolve_device(device: str) -> str:
+def _resolve_device(device: str, cuda_lib_dir: str = "") -> str:
     if device == "auto":
-        return "cuda" if cuda_available() else "cpu"
+        return "cuda" if cuda_available(cuda_lib_dir) else "cpu"
+    if device == "cuda":
+        setup_cuda(cuda_lib_dir)
     return device
+
+
+def model_repo_id(model: str) -> str:
+    """Size name -> Hugging Face repo id used by faster-whisper (passes repo ids through)"""
+    try:
+        from faster_whisper.utils import _MODELS
+        return _MODELS.get(model, model)
+    except Exception:
+        return model
+
+
+def is_model_cached(model: str, model_dir: str = "") -> bool:
+    """True if the faster-whisper model is already in the local cache"""
+    if os.path.isdir(model) and os.path.isfile(os.path.join(model, "model.bin")):
+        return True
+    repo = model_repo_id(model)
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        res = try_to_load_from_cache(repo, "model.bin", cache_dir=model_dir or None)
+        return isinstance(res, str) and os.path.isfile(res)
+    except Exception:
+        return False
+
+
+def download_model(model: str, model_dir: str = "") -> str:
+    """Fetch a faster-whisper model into the cache; returns the local folder"""
+    from faster_whisper import download_model as _dl
+    return _dl(model, cache_dir=model_dir or None)
 
 
 def _load_model(settings: Dict, cb: TranscribeCallbacks):
     from faster_whisper import WhisperModel
 
-    device = _resolve_device(settings["device"])
+    device = _resolve_device(settings["device"], settings.get("cuda_lib_dir", ""))
     compute = settings["compute_type"]
     if compute == "default":
         compute = "float16" if device == "cuda" else "int8"

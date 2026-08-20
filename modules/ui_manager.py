@@ -17,7 +17,9 @@ from PySide6.QtCore import QUrl
 from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUTE_TYPES, LANGUAGES,
                     TASKS, SUBTITLE_FORMATS, MUX_CONTAINERS, DEFAULT_SETTINGS, QUALITY_PRESETS,
                     MEDIA_EXTENSIONS)
-from modules.backends import cuda_available, faster_whisper_available
+from modules.backends import cuda_available, faster_whisper_available, is_model_cached, model_repo_id
+from utils.cuda_utils import cuda_status
+from PySide6.QtCore import QThread
 from utils.file_utils import format_duration
 
 
@@ -377,13 +379,41 @@ class UIManager(QWidget):
         grid.addWidget(QLabel("Model folder:"), 4, 0)
         grid.addLayout(self._path_row(self.controls["model_dir"],
                                       lambda: self._browse_dir(self.controls["model_dir"], "Model folder")), 4, 1)
+        # model download / cache row
+        dl_row = QHBoxLayout()
+        self.model_cache_label = QLabel("")
+        self.model_cache_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.controls["download_model"] = QPushButton("Download / check model")
+        self.controls["download_model"].setToolTip("Fetch the selected faster-whisper model now instead of at the first transcription")
+        self.controls["download_model"].clicked.connect(self._on_download_model)
+        dl_row.addWidget(self.model_cache_label, 1)
+        dl_row.addWidget(self.controls["download_model"])
+        grid.addLayout(dl_row, 5, 0, 1, 2)
         model_group.setLayout(grid)
         layout.addWidget(model_group)
+        self.controls["model"].currentTextChanged.connect(self._refresh_model_cache_label)
+        self.controls["model_dir"].editingFinished.connect(self._refresh_model_cache_label)
 
+        gpu_group = QGroupBox("GPU acceleration (NVIDIA CUDA)")
+        gl = QGridLayout()
         self.hw_label = QLabel("")
         self.hw_label.setWordWrap(True)
-        self.hw_label.setStyleSheet("color: #666; font-size: 11px;")
-        layout.addWidget(self.hw_label)
+        self.hw_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        gl.addWidget(self.hw_label, 0, 0, 1, 2)
+        self.controls["cuda_lib_dir"] = QLineEdit()
+        self.controls["cuda_lib_dir"].setPlaceholderText("auto (pip nvidia-* packages, CUDA_PATH, 'cuda' folder next to the app)")
+        self.controls["cuda_lib_dir"].setToolTip("Folder containing cuBLAS 12 and cuDNN 9 libraries "
+                                                 "(cublas64_12.dll, cublasLt64_12.dll, cudnn64_9.dll / libcublas.so.12, libcudnn.so.9)")
+        self.controls["cuda_lib_dir"].editingFinished.connect(self._refresh_gpu_status)
+        gl.addWidget(QLabel("CUDA libraries folder:"), 1, 0)
+        gl.addLayout(self._path_row(self.controls["cuda_lib_dir"],
+                                    lambda: (self._browse_dir(self.controls["cuda_lib_dir"], "CUDA libraries folder"),
+                                             self._refresh_gpu_status())), 1, 1)
+        recheck = QPushButton("Re-check GPU")
+        recheck.clicked.connect(self._refresh_gpu_status)
+        gl.addWidget(recheck, 2, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        gpu_group.setLayout(gl)
+        layout.addWidget(gpu_group)
         layout.addStretch()
         return tab
 
@@ -570,8 +600,8 @@ class UIManager(QWidget):
             self.engine_hint.setText("Python CTranslate2 implementation, bundled with the app. CPU or NVIDIA CUDA. "
                                      "Models are downloaded automatically." if ok else
                                      "faster-whisper is NOT installed: pip install faster-whisper")
-            cuda = cuda_available()
-            self.hw_label.setText(f"CUDA GPU: {'available' if cuda else 'not detected — CPU will be used'}")
+            self._refresh_gpu_status()
+            self._refresh_model_cache_label()
             self.engine_status.setText("Engine: faster-whisper ✓" if ok else "Engine: faster-whisper ✗")
             self.engine_status.setStyleSheet("color: green;" if ok else "color: red;")
         else:
@@ -579,10 +609,69 @@ class UIManager(QWidget):
             exe = find_whisper_cli(self.controls["whisper_cli_path"].text() if "whisper_cli_path" in self.controls else "")
             self.engine_hint.setText("External C/C++ whisper.cpp binary (CPU, CUDA, Vulkan, Metal builds). "
                                      "Set the executable on the Advanced tab and a folder with ggml models above.")
-            self.hw_label.setText(f"whisper-cli: {exe or 'not found'}")
+            self.hw_label.setText(f"whisper-cli: {exe or 'not found'} — GPU use depends on how whisper.cpp was built "
+                                  "(CUDA / Vulkan / Metal builds use the GPU automatically; Device=cpu passes -ng).")
+            self.model_cache_label.setText("whisper.cpp: put ggml-<model>.bin files into the model folder")
             self.engine_status.setText("Engine: whisper.cpp ✓" if exe else "Engine: whisper.cpp ✗")
             self.engine_status.setStyleSheet("color: green;" if exe else "color: red;")
         self.stat_device.setText("--")
+
+    def _refresh_gpu_status(self, *_):
+        if self.controls["engine"].currentData() != "faster_whisper":
+            return
+        st = cuda_status(self.controls["cuda_lib_dir"].text().strip())
+        self.hw_label.setText(str(st["text"]))
+        self.hw_label.setStyleSheet("color: %s; font-size: 11px;" % ("#155724" if st["ready"] else "#856404"))
+        self._cuda_ready = bool(st["ready"])
+
+    def _refresh_model_cache_label(self, *_):
+        if self.controls["engine"].currentData() != "faster_whisper":
+            return
+        model = self.controls["model"].currentText().strip()
+        if not model:
+            self.model_cache_label.setText("")
+            return
+        cached = is_model_cached(model, self.controls["model_dir"].text().strip())
+        self.model_cache_label.setText(f"{model_repo_id(model)} — {'✓ downloaded' if cached else 'not downloaded yet (fetched on first use)'}")
+        self.model_cache_label.setStyleSheet("color: %s; font-size: 11px;" % ("#155724" if cached else "#666"))
+
+    def _on_download_model(self):
+        if self.controls["engine"].currentData() != "faster_whisper":
+            QMessageBox.information(self.main_window, "whisper.cpp models",
+                                    "Download GGML models from huggingface.co/ggerganov/whisper.cpp and put them in the model folder.")
+            return
+        model = self.controls["model"].currentText().strip()
+        model_dir = self.controls["model_dir"].text().strip()
+        if not model:
+            return
+        from modules.backends import download_model
+
+        class _Dl(QThread):
+            done = Signal(str, str)
+
+            def run(self_inner):
+                try:
+                    path = download_model(model, model_dir)
+                    self_inner.done.emit(path, "")
+                except Exception as exc:  # noqa: BLE001
+                    self_inner.done.emit("", str(exc))
+
+        self.controls["download_model"].setEnabled(False)
+        self.controls["download_model"].setText("Downloading…")
+        self.update_status(f"Downloading model {model} ({model_repo_id(model)})…")
+        self._dl_thread = _Dl()
+
+        def finished(path, err):
+            self.controls["download_model"].setEnabled(True)
+            self.controls["download_model"].setText("Download / check model")
+            if err:
+                QMessageBox.warning(self.main_window, "Download failed", err)
+                self.update_status("Model download failed")
+            else:
+                self.update_status(f"Model ready: {path}")
+            self._refresh_model_cache_label()
+        self._dl_thread.done.connect(finished)
+        self._dl_thread.start()
 
     def _on_output_mode_changed(self, *_):
         custom = self.controls["output_mode"].currentData() == "custom"
@@ -769,7 +858,7 @@ class UIManager(QWidget):
             return "whisper.cpp"
         dev = self.controls["device"].currentText()
         if dev == "auto":
-            dev = "cuda" if cuda_available() else "cpu"
+            dev = "cuda" if cuda_available(self.controls["cuda_lib_dir"].text().strip()) else "cpu"
         return dev.upper()
 
     # ------------------------------------------------------------------
@@ -785,6 +874,7 @@ class UIManager(QWidget):
             "model_dir": c["model_dir"].text().strip(),
             "whisper_cli_path": c["whisper_cli_path"].text().strip(),
             "cpu_threads": c["cpu_threads"].value(),
+            "cuda_lib_dir": c["cuda_lib_dir"].text().strip(),
             "language": c["language"].currentData(),
             "task": c["task"].currentData(),
             "vad_filter": c["vad_filter"].isChecked(),
@@ -843,6 +933,8 @@ class UIManager(QWidget):
                     w.setValue(float(val))
                 elif isinstance(w, QLineEdit):
                     w.setText(str(val))
+        self._refresh_gpu_status()
+        self._refresh_model_cache_label()
 
     def load_settings(self, qsettings: QSettings):
         s = {}

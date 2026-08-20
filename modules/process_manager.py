@@ -286,6 +286,11 @@ class ProcessManager(QObject):
             issues.append("whisper-cli executable not found (Advanced tab).")
         if s["engine"] == "whisper_cpp" and not find_ffmpeg():
             issues.append("FFmpeg is required for whisper.cpp (audio must be converted to 16 kHz WAV).")
+        if s["engine"] == "faster_whisper" and s["device"] == "cuda":
+            from utils.cuda_utils import cuda_status
+            st = cuda_status(s.get("cuda_lib_dir", ""))
+            if not st["ready"]:
+                issues.append("Device is set to CUDA but the GPU is not usable: " + str(st["text"]).split("\n")[0])
         if s["engine"] == "faster_whisper" and s.get("extra_args"):
             issues.append("Extra whisper-cli arguments are ignored by the faster-whisper engine.")
         if s.get("mux_subtitles") and not find_ffmpeg():

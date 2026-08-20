@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Build a self-contained whisperer distribution (no Python required on the target) using Nuitka,
+Build a self-contained whisperer distribution (no Python required on the target) using PyInstaller,
 then package it as
     dist/whisperer-<version>-<os>-<arch>.zip      (Windows)
     dist/whisperer-<version>-<os>-<arch>.tar.gz   (Linux / macOS, keeps exec bits)
 
 Usage:  python build.py            (run from the repository root)
-Needs:  pip install -r requirements.txt nuitka
+Needs:  pip install -r requirements.txt pyinstaller
 """
 import glob
 import os
@@ -37,7 +37,7 @@ def arch_tag() -> str:
 
 
 def metadata_flags(*names: str) -> list:
-    """--include-distribution-metadata only for distributions that are actually installed"""
+    """--copy-metadata only for distributions that are actually installed"""
     from importlib.metadata import distribution, PackageNotFoundError
     flags = []
     for name in names:
@@ -45,58 +45,53 @@ def metadata_flags(*names: str) -> list:
             distribution(name)
         except PackageNotFoundError:
             continue
-        flags.append(f"--include-distribution-metadata={name}")
+        flags.append(f"--copy-metadata={name}")
     return flags
 
 
-def nuitka_command() -> list:
+def pyinstaller_command() -> list:
     cmd = [
-        sys.executable, "-m", "nuitka",
-        "--standalone",
-        "--assume-yes-for-downloads",
-        "--enable-plugin=pyside6",
-        "--noinclude-qt-translations",
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean", "--onedir", "--windowed",
+        f"--name={APP_NAME}",
+        f"--distpath={os.path.join(BUILD_DIR, 'out')}",
+        f"--workpath={os.path.join(BUILD_DIR, 'work')}",
+        f"--specpath={BUILD_DIR}",
         # native inference stack used by faster-whisper
-        "--include-package=faster_whisper",
-        "--include-package-data=faster_whisper",
-        "--include-package=ctranslate2",
-        "--include-package=tokenizers",
-        "--include-package=huggingface_hub",
-        "--include-package=onnxruntime",
-        "--include-package-data=onnxruntime",
-        "--include-package=av",
-        *metadata_flags("faster-whisper", "ctranslate2", "tokenizers", "huggingface_hub",
-                        "onnxruntime", "av", "tqdm", "numpy", "requests", "httpx", "filelock", "packaging",
-                        "pyyaml", "typing_extensions", "fsspec"),
-        f"--output-dir={BUILD_DIR}",
-        f"--output-filename={APP_NAME}",
-        "--include-data-files=icon.ico=icon.ico",
-        f"--product-name={APP_NAME}",
-        f"--product-version={APP_VERSION}",
-        f"--file-version={APP_VERSION}",
-        "--file-description=Whisper subtitle generator GUI",
-        "--copyright=MIT License",
+        "--collect-all=faster_whisper",
+        "--collect-all=ctranslate2",
+        "--collect-all=onnxruntime",
+        "--collect-all=tokenizers",
+        "--collect-all=huggingface_hub",
+        "--collect-submodules=av",
+        "--collect-binaries=av",
+        "--hidden-import=psutil",
+        *metadata_flags("faster-whisper", "ctranslate2", "tokenizers", "huggingface_hub", "onnxruntime", "av",
+                        "tqdm", "numpy", "requests", "httpx", "filelock", "packaging", "PyYAML",
+                        "typing_extensions", "fsspec", "hf-xet", "psutil"),
+        # trim Qt modules we never use
+        "--exclude-module=PySide6.QtWebEngineCore", "--exclude-module=PySide6.QtWebEngineWidgets",
+        "--exclude-module=PySide6.Qt3DCore", "--exclude-module=PySide6.QtQuick", "--exclude-module=PySide6.QtQml",
+        "--exclude-module=PySide6.QtMultimedia", "--exclude-module=PySide6.QtCharts", "--exclude-module=PySide6.QtPdf",
+        "--exclude-module=torch", "--exclude-module=tkinter",
+        f"--add-data={os.path.join(ROOT, 'icon.ico')}{os.pathsep}.",
     ]
-    system = platform.system()
-    if system == "Windows":
-        cmd += ["--windows-console-mode=disable", "--windows-icon-from-ico=icon.ico"]
-    elif system == "Darwin":
-        cmd += ["--macos-create-app-bundle", "--macos-app-icon=none",
-                f"--macos-app-name={APP_NAME}", f"--macos-app-version={APP_VERSION}"]
-    cmd.append("main.py")
+    if platform.system() != "Darwin":
+        cmd.append(f"--icon={os.path.join(ROOT, 'icon.ico')}")
+    cmd.append(os.path.join(ROOT, "main.py"))
     return cmd
 
 
 def find_output_dir() -> str:
+    out = os.path.join(BUILD_DIR, "out")
     if platform.system() == "Darwin":
-        patterns = ("main.app", f"{APP_NAME}.app", "*.app")
-    else:
-        patterns = ("main.dist", "*.dist")
-    for pattern in patterns:
-        matches = glob.glob(os.path.join(BUILD_DIR, pattern))
-        if matches:
-            return matches[0]
-    raise SystemExit("Nuitka output directory not found in build/")
+        app = os.path.join(out, f"{APP_NAME}.app")
+        if os.path.isdir(app):
+            return app
+    folder = os.path.join(out, APP_NAME)
+    if os.path.isdir(folder):
+        return folder
+    raise SystemExit("PyInstaller output directory not found in build/out")
 
 
 def package(out_dir: str) -> str:
@@ -127,7 +122,7 @@ def package(out_dir: str) -> str:
 def main():
     os.chdir(ROOT)
     shutil.rmtree(BUILD_DIR, ignore_errors=True)
-    cmd = nuitka_command()
+    cmd = pyinstaller_command()
     print("Running:", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
     archive = package(find_output_dir())

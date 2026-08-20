@@ -154,7 +154,27 @@ def main():
         app.setWindowIcon(QIcon(icon_path))
     window = MainWindow()
     window.show()
+    selftest = os.environ.get("WHISPERER_SELFTEST")
+    if selftest:
+        _run_selftest(window, selftest)
     sys.exit(app.exec())
+
+
+def _run_selftest(window: "MainWindow", path: str):
+    """Headless smoke test used by CI / packaging: transcribe one file with tiny.en and exit (0 = ok)"""
+    from PySide6.QtCore import QTimer
+    window.preset_manager.apply_settings({"engine": "faster_whisper", "model": "tiny.en", "device": "cpu",
+                                          "formats": ["srt"], "overwrite": True, "beam_size": 1})
+    window.file_manager.add_files([path])
+    window.process_manager.status_updated.connect(lambda m: print("selftest:", m, flush=True))
+
+    def finished(ok, total):
+        print(f"selftest: finished {ok}/{total}", flush=True)
+        QTimer.singleShot(0, lambda: sys.exit(0 if ok == total else 1))
+    window.process_manager.processing_finished.disconnect(window.on_processing_finished)
+    window.process_manager.processing_finished.connect(finished)
+    QTimer.singleShot(200, lambda: window.process_manager.start_processing(
+        window.file_manager.get_queue(), window.ui_manager.get_current_settings()))
 
 
 if __name__ == "__main__":
