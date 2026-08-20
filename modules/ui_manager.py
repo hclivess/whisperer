@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheck
                                QLineEdit, QFileDialog, QGroupBox, QListWidget, QProgressBar, QSplitter,
                                QListWidgetItem, QTabWidget, QSpinBox, QDoubleSpinBox, QComboBox,
                                QGridLayout, QFrame, QSizePolicy, QMessageBox, QPlainTextEdit, QTextEdit,
-                               QFormLayout)
+                               QFormLayout, QScrollArea)
 from PySide6.QtCore import Qt, Signal, QSettings
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QColor, QBrush, QDesktopServices
 from PySide6.QtCore import QUrl
@@ -153,7 +153,9 @@ class UIManager(QWidget):
         main_layout.addWidget(splitter)
         splitter.addWidget(self._create_left_panel())
         splitter.addWidget(self._create_right_panel())
-        splitter.setSizes([520, 680])
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([480, 720])
 
     # -- left: queue + progress + buttons ----------------------------------
     def _create_left_panel(self):
@@ -288,11 +290,19 @@ class UIManager(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._create_model_tab(), "Model")
-        self.tabs.addTab(self._create_transcription_tab(), "Transcription")
-        self.tabs.addTab(self._create_subtitles_tab(), "Subtitles")
-        self.tabs.addTab(self._create_advanced_tab(), "Advanced")
-        layout.addWidget(self.tabs, 3)
+        for widget, title in ((self._create_model_tab(), "Model"),
+                              (self._create_transcription_tab(), "Transcription"),
+                              (self._create_subtitles_tab(), "Subtitles"),
+                              (self._create_advanced_tab(), "Advanced")):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setWidget(widget)
+            self.tabs.addTab(scroll, title)
+        self._fix_field_sizing()
+        vsplit = QSplitter(Qt.Orientation.Vertical)
+        vsplit.addWidget(self.tabs)
 
         transcript_group = QGroupBox("Live Transcript")
         tl = QVBoxLayout()
@@ -309,8 +319,37 @@ class UIManager(QWidget):
         trow.addWidget(clear_btn)
         tl.addLayout(trow)
         transcript_group.setLayout(tl)
-        layout.addWidget(transcript_group, 2)
+        self.transcript.setMinimumHeight(60)
+        vsplit.addWidget(transcript_group)
+        vsplit.setStretchFactor(0, 3)
+        vsplit.setStretchFactor(1, 1)
+        vsplit.setSizes([520, 200])
+        layout.addWidget(vsplit)
         return panel
+
+    def _fix_field_sizing(self):
+        """Let combos / line edits shrink with the window instead of forcing the width of their longest entry,
+        and keep them comfortably tall on any DPI"""
+        for combo in self.tabs.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            combo.setMinimumHeight(28)
+        for edit in self.tabs.findChildren(QLineEdit):
+            edit.setMinimumWidth(80)
+            edit.setMinimumHeight(28)
+        for spin in self.tabs.findChildren(QSpinBox) + self.tabs.findChildren(QDoubleSpinBox):
+            spin.setMinimumHeight(28)
+            spin.setMinimumWidth(90)
+        for grid in self.tabs.findChildren(QGridLayout):
+            grid.setColumnStretch(1, 1)
+        for label in self.tabs.findChildren(QLabel):
+            if label.wordWrap():
+                # wrapped labels must not dictate the minimum width of the panel
+                label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+                label.setMinimumWidth(0)
+        for btn in self.tabs.findChildren(QPushButton):
+            btn.setMinimumHeight(28)
 
     def _browse_dir(self, line_edit: QLineEdit, title: str):
         d = QFileDialog.getExistingDirectory(self.main_window, title, line_edit.text() or os.path.expanduser("~"))
@@ -375,7 +414,7 @@ class UIManager(QWidget):
         grid.addWidget(QLabel("CPU threads:"), 3, 0)
         grid.addWidget(self.controls["cpu_threads"], 3, 1)
         self.controls["model_dir"] = QLineEdit()
-        self.controls["model_dir"].setPlaceholderText("default cache (~/.cache/huggingface) / folder with ggml-*.bin files")
+        self.controls["model_dir"].setPlaceholderText("default cache / folder with ggml-*.bin files")
         grid.addWidget(QLabel("Model folder:"), 4, 0)
         grid.addLayout(self._path_row(self.controls["model_dir"],
                                       lambda: self._browse_dir(self.controls["model_dir"], "Model folder")), 4, 1)
@@ -383,6 +422,7 @@ class UIManager(QWidget):
         dl_row = QHBoxLayout()
         self.model_cache_label = QLabel("")
         self.model_cache_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.model_cache_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.controls["download_model"] = QPushButton("Download / check model")
         self.controls["download_model"].setToolTip("Fetch the selected faster-whisper model now instead of at the first transcription")
         self.controls["download_model"].clicked.connect(self._on_download_model)
@@ -401,7 +441,7 @@ class UIManager(QWidget):
         self.hw_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         gl.addWidget(self.hw_label, 0, 0, 1, 2)
         self.controls["cuda_lib_dir"] = QLineEdit()
-        self.controls["cuda_lib_dir"].setPlaceholderText("auto (pip nvidia-* packages, CUDA_PATH, 'cuda' folder next to the app)")
+        self.controls["cuda_lib_dir"].setPlaceholderText("auto (pip packages, CUDA_PATH, 'cuda' folder next to the app)")
         self.controls["cuda_lib_dir"].setToolTip("Folder containing cuBLAS 12 and cuDNN 9 libraries "
                                                  "(cublas64_12.dll, cublasLt64_12.dll, cudnn64_9.dll / libcublas.so.12, libcudnn.so.9)")
         self.controls["cuda_lib_dir"].editingFinished.connect(self._refresh_gpu_status)
@@ -412,6 +452,7 @@ class UIManager(QWidget):
         btn_row = QHBoxLayout()
         self.cuda_dl_label = QLabel("")
         self.cuda_dl_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.cuda_dl_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.controls["download_cuda"] = QPushButton("Download CUDA libraries")
         self.controls["download_cuda"].setToolTip("Fetch cuBLAS 12 + cuDNN 9 from PyPI (official NVIDIA wheels, ~1 GB) "
                                                   "into a 'cuda' folder next to the app")
@@ -452,7 +493,7 @@ class UIManager(QWidget):
         self.controls["beam_size"].setToolTip("1 = greedy (fastest), 5 = default quality")
         grid.addWidget(QLabel("Beam size:"), 0, 0)
         grid.addWidget(self.controls["beam_size"], 0, 1)
-        self.controls["vad_filter"] = QCheckBox("VAD filter (skip silence, fewer hallucinations)")
+        self.controls["vad_filter"] = QCheckBox("VAD filter (skip silence)")
         self.controls["vad_filter"].setChecked(True)
         grid.addWidget(self.controls["vad_filter"], 1, 0, 1, 2)
         self.controls["vad_min_silence_ms"] = QSpinBox()
@@ -462,15 +503,18 @@ class UIManager(QWidget):
         self.controls["vad_min_silence_ms"].setValue(500)
         grid.addWidget(QLabel("VAD min. silence:"), 2, 0)
         grid.addWidget(self.controls["vad_min_silence_ms"], 2, 1)
-        self.controls["word_timestamps"] = QCheckBox("Word timestamps (more precise cue splitting; slower)")
+        self.controls["word_timestamps"] = QCheckBox("Word timestamps")
+        self.controls["word_timestamps"].setToolTip("Per-word timing: more precise cue splitting, a bit slower")
         grid.addWidget(self.controls["word_timestamps"], 3, 0, 1, 2)
-        self.controls["condition_on_previous_text"] = QCheckBox("Condition on previous text (better context, may loop on bad audio)")
+        self.controls["condition_on_previous_text"] = QCheckBox("Condition on previous text")
+        self.controls["condition_on_previous_text"].setToolTip("Use the previous segment as context: better consistency, "
+                                                               "but can get stuck repeating on bad audio")
         self.controls["condition_on_previous_text"].setChecked(True)
         grid.addWidget(self.controls["condition_on_previous_text"], 4, 0, 1, 2)
         dec_group.setLayout(grid)
         layout.addWidget(dec_group)
 
-        prompt_group = QGroupBox("Initial prompt (vocabulary hint: names, jargon, punctuation style)")
+        prompt_group = QGroupBox("Initial prompt (names, jargon, punctuation style)")
         pl = QVBoxLayout()
         self.controls["initial_prompt"] = QPlainTextEdit()
         self.controls["initial_prompt"].setPlaceholderText("e.g. Hello, welcome to the Videer podcast with Jan Kučera.")
@@ -537,7 +581,7 @@ class UIManager(QWidget):
         self.controls["suffix"].setPlaceholderText("optional, e.g. _whisper")
         og.addWidget(QLabel("File name suffix:"), 2, 0)
         og.addWidget(self.controls["suffix"], 2, 1)
-        self.controls["language_suffix"] = QCheckBox("Add language code to file name (video.en.srt — players auto-detect it)")
+        self.controls["language_suffix"] = QCheckBox("Language code in file name (video.en.srt)")
         self.controls["language_suffix"].setChecked(True)
         og.addWidget(self.controls["language_suffix"], 3, 0, 1, 2)
         self.controls["overwrite"] = QCheckBox("Overwrite existing subtitle files")
@@ -545,9 +589,9 @@ class UIManager(QWidget):
         out_group.setLayout(og)
         layout.addWidget(out_group)
 
-        mux_group = QGroupBox("Embed into video (FFmpeg, stream copy — no re-encode)")
+        mux_group = QGroupBox("Embed into video (stream copy, no re-encode)")
         ml = QHBoxLayout()
-        self.controls["mux_subtitles"] = QCheckBox("Also write a copy of the video with a soft subtitle track")
+        self.controls["mux_subtitles"] = QCheckBox("Write a copy of the video with a soft subtitle track")
         ml.addWidget(self.controls["mux_subtitles"])
         self.controls["mux_container"] = QComboBox()
         self.controls["mux_container"].addItems(list(MUX_CONTAINERS.keys()))
@@ -565,7 +609,7 @@ class UIManager(QWidget):
         cpp_group = QGroupBox("whisper.cpp")
         grid = QGridLayout()
         self.controls["whisper_cli_path"] = QLineEdit()
-        self.controls["whisper_cli_path"].setPlaceholderText("auto (whisper-cli in PATH or next to the app)")
+        self.controls["whisper_cli_path"].setPlaceholderText("auto (PATH or next to the app)")
         grid.addWidget(QLabel("whisper-cli executable:"), 0, 0)
         grid.addLayout(self._path_row(self.controls["whisper_cli_path"],
                                       lambda: self._browse_file(self.controls["whisper_cli_path"], "whisper-cli executable")), 0, 1)
@@ -583,8 +627,8 @@ class UIManager(QWidget):
             "• whisper.cpp needs GGML models (ggml-small.en.bin …) from "
             "<a href='https://huggingface.co/ggerganov/whisper.cpp/tree/main'>huggingface.co/ggerganov/whisper.cpp</a>.<br>"
             "• Audio is extracted with FFmpeg to 16 kHz mono WAV in a temp folder and deleted afterwards.<br>"
-            "• CUDA with faster-whisper needs the CUDA 12 + cuDNN 9 runtime libraries "
-            "(pip install nvidia-cublas-cu12 nvidia-cudnn-cu12).")
+            "• GPU: use <i>Model → Download CUDA libraries</i> once (cuBLAS 12 + cuDNN 9, ~1 GB), "
+            "or pip install nvidia-cublas-cu12 nvidia-cudnn-cu12.")
         info.setWordWrap(True)
         info.setOpenExternalLinks(True)
         info.setStyleSheet("color: #555;")
