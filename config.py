@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 WINDOW_MIN_WIDTH = 1100
 WINDOW_MIN_HEIGHT = 720
 

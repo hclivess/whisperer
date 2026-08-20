@@ -18,7 +18,7 @@ from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUT
                     TASKS, SUBTITLE_FORMATS, MUX_CONTAINERS, DEFAULT_SETTINGS, QUALITY_PRESETS,
                     MEDIA_EXTENSIONS)
 from modules.backends import cuda_available, faster_whisper_available, is_model_cached, model_repo_id
-from utils.cuda_utils import cuda_status
+from utils.cuda_utils import cuda_status, download_cuda_libraries, default_cuda_dir
 from PySide6.QtCore import QThread
 from utils.file_utils import format_duration
 
@@ -409,9 +409,19 @@ class UIManager(QWidget):
         gl.addLayout(self._path_row(self.controls["cuda_lib_dir"],
                                     lambda: (self._browse_dir(self.controls["cuda_lib_dir"], "CUDA libraries folder"),
                                              self._refresh_gpu_status())), 1, 1)
+        btn_row = QHBoxLayout()
+        self.cuda_dl_label = QLabel("")
+        self.cuda_dl_label.setStyleSheet("color: #666; font-size: 11px;")
+        self.controls["download_cuda"] = QPushButton("Download CUDA libraries")
+        self.controls["download_cuda"].setToolTip("Fetch cuBLAS 12 + cuDNN 9 from PyPI (official NVIDIA wheels, ~1 GB) "
+                                                  "into a 'cuda' folder next to the app")
+        self.controls["download_cuda"].clicked.connect(self._on_download_cuda)
         recheck = QPushButton("Re-check GPU")
         recheck.clicked.connect(self._refresh_gpu_status)
-        gl.addWidget(recheck, 2, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        btn_row.addWidget(self.cuda_dl_label, 1)
+        btn_row.addWidget(self.controls["download_cuda"])
+        btn_row.addWidget(recheck)
+        gl.addLayout(btn_row, 2, 0, 1, 2)
         gpu_group.setLayout(gl)
         layout.addWidget(gpu_group)
         layout.addStretch()
@@ -623,6 +633,57 @@ class UIManager(QWidget):
         self.hw_label.setText(str(st["text"]))
         self.hw_label.setStyleSheet("color: %s; font-size: 11px;" % ("#155724" if st["ready"] else "#856404"))
         self._cuda_ready = bool(st["ready"])
+
+    def _on_download_cuda(self):
+        import sys as _sys
+        if _sys.platform == "darwin":
+            QMessageBox.information(self.main_window, "CUDA", "CUDA is not available on macOS.")
+            return
+        dest = self.controls["cuda_lib_dir"].text().strip() or default_cuda_dir()
+        reply = QMessageBox.question(
+            self.main_window, "Download CUDA libraries",
+            f"Download cuBLAS 12 and cuDNN 9 (official NVIDIA wheels from PyPI, about 1 GB) into:\n{dest}\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        class _Dl(QThread):
+            progress = Signal(str, int, int)
+            done = Signal(list, str)
+            stop = False
+
+            def run(self_inner):
+                try:
+                    files = download_cuda_libraries(dest, progress=lambda m, d, t: self_inner.progress.emit(m, d, t),
+                                                    should_stop=lambda: self_inner.stop)
+                    self_inner.done.emit(files, "")
+                except Exception as exc:  # noqa: BLE001
+                    self_inner.done.emit([], str(exc))
+
+        self.controls["download_cuda"].setEnabled(False)
+        self.controls["download_cuda"].setText("Downloading…")
+        self._cuda_thread = _Dl()
+
+        def on_progress(msg, done, total):
+            if total:
+                self.cuda_dl_label.setText(f"{msg} — {done / 1048576:.0f} / {total / 1048576:.0f} MB")
+            else:
+                self.cuda_dl_label.setText(msg)
+
+        def finished(files, err):
+            self.controls["download_cuda"].setEnabled(True)
+            self.controls["download_cuda"].setText("Download CUDA libraries")
+            if err:
+                self.cuda_dl_label.setText("Download failed")
+                QMessageBox.warning(self.main_window, "Download failed", err)
+            else:
+                self.cuda_dl_label.setText(f"{len(files)} libraries installed in {dest}")
+                if not self.controls["cuda_lib_dir"].text().strip():
+                    self.controls["cuda_lib_dir"].setText(dest)
+            self._refresh_gpu_status()
+        self._cuda_thread.progress.connect(on_progress)
+        self._cuda_thread.done.connect(finished)
+        self._cuda_thread.start()
 
     def _refresh_model_cache_label(self, *_):
         if self.controls["engine"].currentData() != "faster_whisper":
