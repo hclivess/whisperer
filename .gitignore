@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+presets/*.json
+!presets/.gitkeep
+*.log
+.venv/

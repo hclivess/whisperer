@@ -1,0 +1,3 @@
+pyside6
+faster-whisper>=1.1
+psutil
