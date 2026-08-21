@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.3"
+APP_VERSION = "1.3.1"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -88,6 +88,7 @@ DEFAULT_SETTINGS = {
     "max_line_chars": 42,
     "max_lines": 2,
     "max_segment_seconds": 7.0,
+    "capitalize_sentences": True,
     "output_mode": "same",          # same | custom
     "output_dir": "",
     "suffix": "",

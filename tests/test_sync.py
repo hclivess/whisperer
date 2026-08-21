@@ -85,3 +85,11 @@ def test_resync_rejects_unrelated_text():
     except RuntimeError:
         return
     raise AssertionError("expected RuntimeError")
+
+
+def test_capitalize_sentences():
+    from utils.subtitle_utils import capitalize_sentences
+    cues = [{"text": "the quick brown fox"}, {"text": "jumps over the dog."}, {"text": "¿qué tal?"},
+            {"text": "\"fine,\" he said."}, {"text": "and then"}]
+    out = [c["text"] for c in capitalize_sentences(cues)]
+    assert out == ["The quick brown fox", "jumps over the dog.", "¿Qué tal?", "\"Fine,\" he said.", "And then"]

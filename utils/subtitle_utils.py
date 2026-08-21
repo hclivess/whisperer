@@ -97,6 +97,31 @@ def _split_proportional(start: float, end: float, text: str, limit_chars: int,
     return out
 
 
+_SENTENCE_END = re.compile(r"""[.!?…。！？]["'”’»)\]]*$""")
+_FIRST_LETTER = re.compile(r"""^([^\w]*)(\w)""", re.UNICODE)
+
+
+def capitalize_sentences(segments: List[Dict]) -> List[Dict]:
+    """
+    Upper-case the first letter of the first cue and of every cue that follows a finished sentence.
+    Whisper often emits a lower-case first word when the audio starts cold or after a VAD cut; cues that merely
+    continue a sentence are left alone.
+    """
+    out = []
+    new_sentence = True
+    for seg in segments:
+        text = seg.get("text", "")
+        if new_sentence:
+            m = _FIRST_LETTER.match(text)
+            if m and m.group(2).islower():
+                text = text[:m.start(2)] + m.group(2).upper() + text[m.end(2):]
+        out.append({**seg, "text": text} if text != seg.get("text", "") else seg)
+        stripped = text.rstrip()
+        if stripped:
+            new_sentence = bool(_SENTENCE_END.search(stripped))
+    return out
+
+
 def wrap_lines(text: str, max_line_chars: int, max_lines: int) -> str:
     """Balance a cue's text over as few lines as possible (no orphan words on the last line)"""
     if max_line_chars <= 0 or len(text) <= max_line_chars:

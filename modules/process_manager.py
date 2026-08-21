@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
-from utils.subtitle_utils import split_segments, write_subtitles
+from utils.subtitle_utils import capitalize_sentences, split_segments, write_subtitles
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 
 try:
@@ -230,6 +230,8 @@ class _Worker(QThread):
                     min_duration=int(s.get("min_cue_ms", 800)) / 1000.0, min_gap=int(s.get("min_gap_ms", 80)) / 1000.0,
                     max_duration=float(s["max_segment_seconds"]) if s.get("sync_mode") != "resync" else 0.0)
                 meta["speech_regions"] = len(regions)
+            if s.get("capitalize_sentences", True) and s.get("sync_mode") != "resync":
+                segments = capitalize_sentences(segments)
             if int(s.get("global_offset_ms", 0)):
                 segments = shift_cues(segments, int(s["global_offset_ms"]) / 1000.0)
             meta["source"] = os.path.basename(src)

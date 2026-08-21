@@ -661,6 +661,12 @@ class UIManager(QWidget):
         self.controls["max_segment_seconds"].setValue(7.0)
         grid.addWidget(QLabel("Max cue duration:"), 2, 0)
         grid.addWidget(self.controls["max_segment_seconds"], 2, 1)
+        self.controls["capitalize_sentences"] = QCheckBox("Capitalise sentence starts")
+        self.controls["capitalize_sentences"].setChecked(True)
+        self.controls["capitalize_sentences"].setToolTip("Whisper sometimes emits the first word of a file or of a "
+                                                         "VAD chunk in lower case; this upper-cases the first letter "
+                                                         "of the first cue and of every cue after a full stop.")
+        grid.addWidget(self.controls["capitalize_sentences"], 3, 0, 1, 2)
         layout_group.setLayout(grid)
         layout.addWidget(layout_group)
 
@@ -1101,6 +1107,7 @@ class UIManager(QWidget):
             "max_line_chars": c["max_line_chars"].value(),
             "max_lines": c["max_lines"].value(),
             "max_segment_seconds": c["max_segment_seconds"].value(),
+            "capitalize_sentences": c["capitalize_sentences"].isChecked(),
             "output_mode": c["output_mode"].currentData(),
             "output_dir": c["output_dir"].text().strip(),
             "suffix": c["suffix"].text().strip(),

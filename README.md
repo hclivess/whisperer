@@ -116,6 +116,11 @@ enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the o
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.3.1
+
+- **Capitalise sentence starts** (Subtitles tab, on by default): Whisper emits a lower-case first word when the audio
+  starts cold or right after a VAD cut; the first cue and every cue after a full stop now start upper-case.
+
 ## Changes in 1.3
 
 - **Sync tab**: VAD-snapped cue timing (on by default), hold-after-speech, min duration, min gap, global offset.
