@@ -93,3 +93,18 @@ def test_capitalize_sentences():
             {"text": "\"fine,\" he said."}, {"text": "and then"}]
     out = [c["text"] for c in capitalize_sentences(cues)]
     assert out == ["The quick brown fox", "jumps over the dog.", "¿Qué tal?", "\"Fine,\" he said.", "And then"]
+
+
+def test_strip_foreign_script():
+    from utils.subtitle_utils import strip_foreign_script
+    cues = [{"text": "In the sense that it has an operation"}, {"text": "or a goal to attack, which is Bar标"},
+            {"text": "标"}, {"text": "and that is all there is to say about it"}]
+    out = [c["text"] for c in strip_foreign_script(cues)]
+    assert out == ["In the sense that it has an operation", "or a goal to attack, which is Bar",
+                   "and that is all there is to say about it"]
+    # bilingual transcript: the second script is common, nothing is removed
+    mixed = [{"text": "Hello 你好 world 世界"}] * 5
+    assert [c["text"] for c in strip_foreign_script(mixed)] == ["Hello 你好 world 世界"] * 5
+    # Czech diacritics are Latin, never touched
+    cz = [{"text": "Příliš žluťoučký kůň úpěl ďábelské ódy"}]
+    assert strip_foreign_script(cz) == cz

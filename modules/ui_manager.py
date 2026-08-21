@@ -667,6 +667,13 @@ class UIManager(QWidget):
                                                          "VAD chunk in lower case; this upper-cases the first letter "
                                                          "of the first cue and of every cue after a full stop.")
         grid.addWidget(self.controls["capitalize_sentences"], 3, 0, 1, 2)
+        self.controls["strip_foreign_script"] = QCheckBox("Remove stray foreign-script characters")
+        self.controls["strip_foreign_script"].setChecked(True)
+        self.controls["strip_foreign_script"].setToolTip("Whisper sometimes hallucinates a single Chinese / Korean / "
+                                                         "Cyrillic character inside the text (\"Bar标\"). Letters of a "
+                                                         "script that makes up under 5 % of the transcript are removed; "
+                                                         "genuinely bilingual files are left alone.")
+        grid.addWidget(self.controls["strip_foreign_script"], 4, 0, 1, 2)
         layout_group.setLayout(grid)
         layout.addWidget(layout_group)
 
@@ -1108,6 +1115,7 @@ class UIManager(QWidget):
             "max_lines": c["max_lines"].value(),
             "max_segment_seconds": c["max_segment_seconds"].value(),
             "capitalize_sentences": c["capitalize_sentences"].isChecked(),
+            "strip_foreign_script": c["strip_foreign_script"].isChecked(),
             "output_mode": c["output_mode"].currentData(),
             "output_dir": c["output_dir"].text().strip(),
             "suffix": c["suffix"].text().strip(),

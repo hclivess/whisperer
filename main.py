@@ -149,6 +149,8 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    from utils import childproc
+    childproc.install_qt_hook(app)      # quitting — for any reason — kills ffmpeg / whisper-cli we started
     icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))

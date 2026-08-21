@@ -6,6 +6,8 @@ import subprocess
 import sys
 from typing import Optional
 
+from utils import childproc
+
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
@@ -48,10 +50,10 @@ def probe_duration(path: str) -> Optional[float]:
     if not ffprobe:
         return None
     try:
-        out = subprocess.run(
+        out = childproc.run(
             [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "json", path],
-            capture_output=True, text=True, timeout=60, creationflags=_CREATE_NO_WINDOW)
+            text=True, timeout=60)
         data = json.loads(out.stdout or "{}")
         return float(data["format"]["duration"])
     except Exception:
@@ -70,17 +72,16 @@ def extract_audio(src: str, dst_wav: str, stop_check=None) -> None:
            "-i", src, "-vn", "-sn", "-dn", "-map", "0:a:0",
            "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", "16000",
            "-c:a", "pcm_s16le", dst_wav]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            creationflags=_CREATE_NO_WINDOW)
+    proc = childproc.popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     while True:
         try:
             _, err = proc.communicate(timeout=0.5)
             break
         except subprocess.TimeoutExpired:
             if stop_check and stop_check():
-                proc.kill()
-                proc.wait()
+                childproc.kill(proc)
                 raise InterruptedError("Audio extraction stopped")
+    childproc.forget(proc)
     if proc.returncode != 0:
         raise RuntimeError(f"FFmpeg failed to extract audio: {err.decode(errors='replace').strip()}")
 
@@ -99,7 +100,7 @@ def mux_subtitles(video: str, subtitle: str, output: str, container: str, langua
            "-map", "0", "-map", "1:0", "-c", "copy", "-c:s", codec,
            "-metadata:s:s:0", f"language={lang}", "-disposition:s:0", "default",
            "-f", {"mkv": "matroska", "mp4": "mp4"}.get(container, "matroska"), tmp]
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=_CREATE_NO_WINDOW)
+    proc = childproc.popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         while True:
             try:
@@ -107,9 +108,9 @@ def mux_subtitles(video: str, subtitle: str, output: str, container: str, langua
                 break
             except subprocess.TimeoutExpired:
                 if stop_check and stop_check():
-                    proc.kill()
-                    proc.wait()
+                    childproc.kill(proc)
                     raise InterruptedError("Muxing stopped")
+        childproc.forget(proc)
         if proc.returncode != 0:
             raise RuntimeError(f"FFmpeg failed to mux subtitles: {err.decode(errors='replace').strip()}")
         os.replace(tmp, output)

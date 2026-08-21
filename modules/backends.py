@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from utils.ffmpeg_utils import find_binary
 from utils.cuda_utils import setup_cuda
+from utils import childproc
 
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -226,9 +227,8 @@ def transcribe_whisper_cpp(audio_path: str, settings: Dict, cb: TranscribeCallba
         cmd += shlex.split(settings["extra_args"])
 
     cb.status("Transcribing with whisper.cpp…")
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                            encoding="utf-8", errors="replace", bufsize=1,
-                            creationflags=_CREATE_NO_WINDOW)
+    proc = childproc.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                           encoding="utf-8", errors="replace", bufsize=1)
     cb.set_process(proc)
     stderr_lines = []
 
@@ -245,7 +245,7 @@ def transcribe_whisper_cpp(audio_path: str, settings: Dict, cb: TranscribeCallba
     try:
         for line in proc.stdout:
             if cb.should_stop():
-                proc.kill()
+                childproc.kill(proc)
                 raise StoppedError()
             m = _WCPP_LINE.match(line.strip())
             if not m:
@@ -262,6 +262,7 @@ def transcribe_whisper_cpp(audio_path: str, settings: Dict, cb: TranscribeCallba
                 cb.progress(end, total)
         proc.wait()
     finally:
+        childproc.forget(proc)
         cb.set_process(None)
         t.join(timeout=2)
     if cb.should_stop():

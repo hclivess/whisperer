@@ -122,6 +122,58 @@ def capitalize_sentences(segments: List[Dict]) -> List[Dict]:
     return out
 
 
+import unicodedata  # noqa: E402
+
+
+def _script(ch: str) -> str:
+    """Coarse script class of a letter: latin, cyrillic, greek, cjk, kana, hangul, arabic, hebrew, thai, devanagari, other"""
+    try:
+        name = unicodedata.name(ch)
+    except ValueError:
+        return "other"
+    for key, script in (("LATIN", "latin"), ("CYRILLIC", "cyrillic"), ("GREEK", "greek"), ("CJK", "cjk"),
+                        ("HIRAGANA", "kana"), ("KATAKANA", "kana"), ("HANGUL", "hangul"), ("ARABIC", "arabic"),
+                        ("HEBREW", "hebrew"), ("THAI", "thai"), ("DEVANAGARI", "devanagari")):
+        if key in name:
+            return script
+    return "other"
+
+
+def strip_foreign_script(segments: List[Dict], max_share: float = 0.05) -> List[Dict]:
+    """
+    Remove letters from scripts that are foreign to the transcript.
+
+    Whisper occasionally hallucinates a stray CJK / Hangul / Cyrillic character inside otherwise English text
+    ("Bar标"). The dominant script of the whole transcript is determined first; any other script whose letters
+    make up less than `max_share` of all letters is removed. Cues that become empty are dropped, so a genuinely
+    bilingual transcript (where the second script is common) is left untouched.
+    """
+    counts: Dict[str, int] = {}
+    for seg in segments:
+        for ch in seg.get("text", ""):
+            if ch.isalpha():
+                sc = _script(ch)
+                counts[sc] = counts.get(sc, 0) + 1
+    total = sum(counts.values())
+    if not total:
+        return segments
+    dominant = max(counts, key=counts.get)
+    foreign = {sc for sc, n in counts.items() if sc != dominant and sc != "other" and n / total < max_share}
+    if not foreign:
+        return segments
+    out = []
+    for seg in segments:
+        text = seg.get("text", "")
+        cleaned = "".join(ch for ch in text if not (ch.isalpha() and _script(ch) in foreign))
+        if cleaned != text:
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if not cleaned:
+                continue
+            seg = {**seg, "text": cleaned}
+        out.append(seg)
+    return out
+
+
 def wrap_lines(text: str, max_line_chars: int, max_lines: int) -> str:
     """Balance a cue's text over as few lines as possible (no orphan words on the last line)"""
     if max_line_chars <= 0 or len(text) <= max_line_chars:
