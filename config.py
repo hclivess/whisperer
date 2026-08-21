@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -41,6 +41,11 @@ LANGUAGES = {
     "da": "Danish", "no": "Norwegian", "el": "Greek", "ro": "Romanian", "vi": "Vietnamese",
 }
 
+SYNC_MODES = {
+    "generate": "Generate subtitles from the audio",
+    "resync": "Resync an existing subtitle file to the audio",
+}
+
 TASKS = {"transcribe": "Transcribe (same language)", "translate": "Translate to English"}
 
 SUBTITLE_FORMATS = ["srt", "vtt", "txt", "json"]
@@ -68,6 +73,16 @@ DEFAULT_SETTINGS = {
     "condition_on_previous_text": True,
     "initial_prompt": "",
     "extra_args": "",
+    # Sync
+    "sync_mode": "generate",        # generate | resync
+    "snap_to_speech": True,
+    "snap_max_shift_ms": 600,
+    "end_padding_ms": 200,
+    "min_cue_ms": 800,
+    "min_gap_ms": 80,
+    "global_offset_ms": 0,
+    "resync_file": "",              # empty = <video>.srt / .vtt next to the source
+    "resync_fit_speed": True,
     # Subtitles
     "formats": ["srt"],
     "max_line_chars": 42,

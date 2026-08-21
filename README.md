@@ -19,6 +19,10 @@ A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress
 - Live queue: add files / folders or drag & drop while a run is in progress, reorder by dragging, pause / resume / stop
 - Live transcript panel — segments appear as they are decoded
 - Progress panel: per-file and overall bars, ETA, speed (× realtime), position, segment count
+- **Timing that follows the audio** — cues are snapped to speech on/offsets found by a voice-activity detector
+  (Silero VAD), held a moment after speech, never overlapping; word-level alignment is used to build the cues
+- **Resync existing subtitles** (the SubSync idea, built in): match an `.srt` / `.vtt` against a transcript of the
+  audio, fit offset + speed robustly, rewrite the timing — the text stays untouched
 - Subtitle layout control: max characters per line, max lines per cue, max cue duration — long segments are re-split
   on word timestamps and lines are balanced (no orphan words)
 - Output next to the source or into a custom folder, `video.en.srt` naming that media players auto-detect, suffix, overwrite guard
@@ -83,6 +87,23 @@ shows whether the model is already cached.
 Tips: keep **VAD filter** on (skips silence and prevents hallucinated text in quiet parts), use an
 **initial prompt** to teach the model names and jargon, and turn on **word timestamps** for tighter cue splitting.
 
+## Sync
+
+![sync tab](thumb-sync.png)
+
+Whisper's own timestamps are decoder guesses quantised to 20 ms; at segment edges they routinely start early and
+linger over silence, and a few containers make things worse by storing an audio stream that starts later than the
+video. whisperer 1.3 fixes the timing from the audio itself:
+
+| Problem | What whisperer does |
+|---|---|
+| Cue appears before the line is spoken / stays on after it | **Snap cues to detected speech** (Sync tab, on by default): every cue start/end is moved onto the nearest speech onset/offset within *Max shift* (600 ms), cues that run over silence are cut, then *Hold after speech* (200 ms), *Min cue duration* and *Min gap* are applied. Word timestamps are used automatically. |
+| Everything early by a constant amount | Audio streams with a non-zero start time are now extracted in place (`aresample=first_pts=0`), and timestamp gaps are filled with silence so nothing drifts over dropped packets. If you still want a nudge: **Global offset**. |
+| Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
+
+Resync picks `movie.srt` / `movie.vtt` next to the video unless you choose a file. A file that does not match the
+audio (wrong language, different cut) is rejected with an explanation rather than guessed at.
+
 ## Output
 
 For `movie.mp4` with language English you get `movie.en.srt` (and any other selected formats). With *Embed into video*
@@ -94,6 +115,14 @@ enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the o
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.3
+
+- **Sync tab**: VAD-snapped cue timing (on by default), hold-after-speech, min duration, min gap, global offset.
+- **Resync existing subtitles** to the audio (offset + speed, SubSync model) — `movie.synced.srt`.
+- **Fixed**: audio streams that start after the video lost their lead during extraction, making every cue early
+  by that amount; timestamp gaps in the audio no longer shift later cues.
+- Self-test now runs real speech through both paths (generate, then shift by 2 s and resync) on the frozen build.
 
 ## License
 

@@ -161,20 +161,65 @@ def main():
 
 
 def _run_selftest(window: "MainWindow", path: str):
-    """Headless smoke test used by CI / packaging: transcribe one file with tiny.en and exit (0 = ok)"""
+    """
+    Headless smoke test used by CI / packaging (tiny.en, CPU). Two real runs on the same file:
+      1. generate subtitles with speech snapping -> the .srt must contain cues
+      2. shift that .srt by +2 s and resync it to the audio -> the fitted offset must be about -2 s
+    Exit code 0 only if both hold.
+    """
+    import json
     from PySide6.QtCore import QTimer
-    window.preset_manager.apply_settings({"engine": "faster_whisper", "model": "tiny.en", "device": "cpu",
-                                          "formats": ["srt"], "overwrite": True, "beam_size": 1})
-    window.file_manager.add_files([path])
-    window.process_manager.status_updated.connect(lambda m: print("selftest:", m, flush=True))
+    from utils.sync_utils import parse_subtitles, shift_cues
+    from utils.subtitle_utils import to_srt
+
+    pm = window.process_manager
+    stem = os.path.splitext(path)[0]
+    pm.status_updated.connect(lambda m: print("selftest:", m, flush=True))
+    pm.processing_finished.disconnect(window.on_processing_finished)
+    state = {"phase": 1}
+
+    def run(extra):
+        window.preset_manager.apply_settings({"engine": "faster_whisper", "model": "tiny.en", "device": "cpu",
+                                              "language": "en", "formats": ["srt", "json"], "overwrite": True,
+                                              "beam_size": 1, "snap_to_speech": True, "language_suffix": False,
+                                              "output_mode": "same", "suffix": "", "resync_file": "", **extra})
+        window.file_manager.add_files([path])
+        pm.start_processing(window.file_manager.get_queue(), window.ui_manager.get_current_settings())
+
+    def fail(msg):
+        print("selftest: FAILED -", msg, flush=True)
+        QTimer.singleShot(0, lambda: sys.exit(1))
 
     def finished(ok, total):
-        print(f"selftest: finished {ok}/{total}", flush=True)
-        QTimer.singleShot(0, lambda: sys.exit(0 if ok == total else 1))
-    window.process_manager.processing_finished.disconnect(window.on_processing_finished)
-    window.process_manager.processing_finished.connect(finished)
-    QTimer.singleShot(200, lambda: window.process_manager.start_processing(
-        window.file_manager.get_queue(), window.ui_manager.get_current_settings()))
+        print(f"selftest: phase {state['phase']} finished {ok}/{total}", flush=True)
+        if ok != total:
+            return fail("processing error")
+        if state["phase"] == 1:
+            srt = stem + ".srt"
+            cues = parse_subtitles(open(srt, encoding="utf-8").read()) if os.path.isfile(srt) else []
+            meta = json.load(open(stem + ".json", encoding="utf-8"))["meta"]
+            print(f"selftest: {len(cues)} cue(s), {meta.get('speech_regions')} speech region(s)", flush=True)
+            if not cues:
+                return fail("no cues written")
+            if not meta.get("speech_regions"):
+                return fail("VAD found no speech in the test clip")
+            with open(stem + ".shifted.srt", "w", encoding="utf-8") as fh:
+                fh.write(to_srt(shift_cues(cues, 2.0), 42, 2))
+            state["phase"] = 2
+            window.file_manager.clear_queue()
+            QTimer.singleShot(200, lambda: run({"sync_mode": "resync", "resync_file": stem + ".shifted.srt"}))
+            return
+        meta = json.load(open(stem + ".synced.json", encoding="utf-8"))["meta"]
+        rep = meta.get("resync") or {}
+        print(f"selftest: resync report {rep}", flush=True)
+        if abs(rep.get("offset", 99) + 2.0) > 0.35:
+            return fail(f"resync offset {rep.get('offset')} is not about -2.0")
+        print("selftest: ok", flush=True)
+        QTimer.singleShot(0, lambda: sys.exit(0))
+
+    pm.processing_finished.connect(finished)
+    QTimer.singleShot(200, lambda: run({"sync_mode": "generate"}))
+    QTimer.singleShot(900_000, lambda: fail("timeout"))
 
 
 if __name__ == "__main__":

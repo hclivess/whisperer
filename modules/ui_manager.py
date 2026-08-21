@@ -16,7 +16,7 @@ from PySide6.QtCore import QUrl
 
 from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUTE_TYPES, LANGUAGES,
                     TASKS, SUBTITLE_FORMATS, MUX_CONTAINERS, DEFAULT_SETTINGS, QUALITY_PRESETS,
-                    MEDIA_EXTENSIONS)
+                    MEDIA_EXTENSIONS, SYNC_MODES)
 from modules.backends import cuda_available, faster_whisper_available, is_model_cached, model_repo_id
 from utils.cuda_utils import cuda_status, download_cuda_libraries, default_cuda_dir
 from PySide6.QtCore import QThread
@@ -292,6 +292,7 @@ class UIManager(QWidget):
         self.tabs = QTabWidget()
         for widget, title in ((self._create_model_tab(), "Model"),
                               (self._create_transcription_tab(), "Transcription"),
+                              (self._create_sync_tab(), "Sync"),
                               (self._create_subtitles_tab(), "Subtitles"),
                               (self._create_advanced_tab(), "Advanced")):
             scroll = QScrollArea()
@@ -524,6 +525,104 @@ class UIManager(QWidget):
         layout.addWidget(prompt_group)
         layout.addStretch()
         return tab
+
+    def _create_sync_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        mode_group = QGroupBox("What to do")
+        mg = QVBoxLayout()
+        self.controls["sync_mode"] = QComboBox()
+        for key, label in SYNC_MODES.items():
+            self.controls["sync_mode"].addItem(label, key)
+        self.controls["sync_mode"].currentIndexChanged.connect(self._on_sync_mode_changed)
+        mg.addWidget(self.controls["sync_mode"])
+        self.resync_widget = QWidget()
+        rg = QGridLayout(self.resync_widget)
+        rg.setContentsMargins(0, 0, 0, 0)
+        self.controls["resync_file"] = QLineEdit()
+        self.controls["resync_file"].setPlaceholderText("auto: <video>.srt / .vtt next to the file")
+        self.controls["resync_file"].setToolTip("Subtitle file to align. Leave empty to pick the .srt/.vtt with the "
+                                                "video's name. The result is written as <video>.synced.srt.")
+        rg.addWidget(QLabel("Subtitle file:"), 0, 0)
+        rg.addLayout(self._path_row(self.controls["resync_file"],
+                                    lambda: self._browse_file(self.controls["resync_file"], "Subtitle file to resync",
+                                                              "Subtitles (*.srt *.vtt);;All files (*)")), 0, 1)
+        self.controls["resync_fit_speed"] = QCheckBox("Also fit speed (frame-rate drift, 23.976 ↔ 25 fps)")
+        self.controls["resync_fit_speed"].setChecked(True)
+        self.controls["resync_fit_speed"].setToolTip("Off: a single constant offset is fitted. On: offset and a speed "
+                                                     "factor, as SubSync does; needed when subtitles drift over time.")
+        rg.addWidget(self.controls["resync_fit_speed"], 1, 0, 1, 2)
+        mg.addWidget(self.resync_widget)
+        hint = QLabel("Resync transcribes the audio, matches the words of the existing subtitles against it, fits "
+                      "offset + speed robustly and rewrites every cue — the text is never changed.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666; font-size: 11px;")
+        mg.addWidget(hint)
+        mode_group.setLayout(mg)
+        layout.addWidget(mode_group)
+
+        snap_group = QGroupBox("Timing")
+        grid = QGridLayout()
+        self.controls["snap_to_speech"] = QCheckBox("Snap cues to detected speech (recommended)")
+        self.controls["snap_to_speech"].setChecked(True)
+        self.controls["snap_to_speech"].setToolTip(
+            "Runs a voice-activity detector over the audio and moves every cue's start and end onto the nearest "
+            "speech onset / offset. Whisper's own timestamps are 20 ms decoder guesses that drift at segment edges; "
+            "the detector sees the actual waveform. Also turns on word timestamps for the engine.")
+        grid.addWidget(self.controls["snap_to_speech"], 0, 0, 1, 2)
+        self.controls["snap_max_shift_ms"] = QSpinBox()
+        self.controls["snap_max_shift_ms"].setRange(50, 3000)
+        self.controls["snap_max_shift_ms"].setSingleStep(50)
+        self.controls["snap_max_shift_ms"].setSuffix(" ms")
+        self.controls["snap_max_shift_ms"].setValue(600)
+        self.controls["snap_max_shift_ms"].setToolTip("How far a cue edge may be moved to reach speech")
+        grid.addWidget(QLabel("Max shift:"), 1, 0)
+        grid.addWidget(self.controls["snap_max_shift_ms"], 1, 1)
+        self.controls["end_padding_ms"] = QSpinBox()
+        self.controls["end_padding_ms"].setRange(0, 2000)
+        self.controls["end_padding_ms"].setSingleStep(50)
+        self.controls["end_padding_ms"].setSuffix(" ms")
+        self.controls["end_padding_ms"].setValue(200)
+        self.controls["end_padding_ms"].setToolTip("Keep the cue visible this long after speech ends (never into the next cue)")
+        grid.addWidget(QLabel("Hold after speech:"), 2, 0)
+        grid.addWidget(self.controls["end_padding_ms"], 2, 1)
+        self.controls["min_cue_ms"] = QSpinBox()
+        self.controls["min_cue_ms"].setRange(100, 5000)
+        self.controls["min_cue_ms"].setSingleStep(100)
+        self.controls["min_cue_ms"].setSuffix(" ms")
+        self.controls["min_cue_ms"].setValue(800)
+        grid.addWidget(QLabel("Min cue duration:"), 3, 0)
+        grid.addWidget(self.controls["min_cue_ms"], 3, 1)
+        self.controls["min_gap_ms"] = QSpinBox()
+        self.controls["min_gap_ms"].setRange(0, 1000)
+        self.controls["min_gap_ms"].setSingleStep(10)
+        self.controls["min_gap_ms"].setSuffix(" ms")
+        self.controls["min_gap_ms"].setValue(80)
+        grid.addWidget(QLabel("Min gap between cues:"), 4, 0)
+        grid.addWidget(self.controls["min_gap_ms"], 4, 1)
+        self.controls["global_offset_ms"] = QSpinBox()
+        self.controls["global_offset_ms"].setRange(-600000, 600000)
+        self.controls["global_offset_ms"].setSingleStep(50)
+        self.controls["global_offset_ms"].setSuffix(" ms")
+        self.controls["global_offset_ms"].setToolTip("Added to every cue at the very end. Negative = earlier.")
+        grid.addWidget(QLabel("Global offset:"), 5, 0)
+        grid.addWidget(self.controls["global_offset_ms"], 5, 1)
+        snap_group.setLayout(grid)
+        layout.addWidget(snap_group)
+        hint2 = QLabel("Symptoms → fix: cues appear before people speak or linger over silence → snapping (on by "
+                       "default). Everything is early/late by the same amount → global offset. Subtitles from "
+                       "elsewhere drift apart over the film → Resync with speed fitting.")
+        hint2.setWordWrap(True)
+        hint2.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(hint2)
+        layout.addStretch()
+        self._on_sync_mode_changed()
+        return tab
+
+    def _on_sync_mode_changed(self, *_):
+        resync = self.controls["sync_mode"].currentData() == "resync"
+        self.resync_widget.setVisible(resync)
 
     def _create_subtitles_tab(self):
         tab = QWidget()
@@ -989,6 +1088,15 @@ class UIManager(QWidget):
             "condition_on_previous_text": c["condition_on_previous_text"].isChecked(),
             "initial_prompt": c["initial_prompt"].toPlainText().strip(),
             "extra_args": c["extra_args"].text().strip(),
+            "sync_mode": c["sync_mode"].currentData(),
+            "snap_to_speech": c["snap_to_speech"].isChecked(),
+            "snap_max_shift_ms": c["snap_max_shift_ms"].value(),
+            "end_padding_ms": c["end_padding_ms"].value(),
+            "min_cue_ms": c["min_cue_ms"].value(),
+            "min_gap_ms": c["min_gap_ms"].value(),
+            "global_offset_ms": c["global_offset_ms"].value(),
+            "resync_file": c["resync_file"].text().strip(),
+            "resync_fit_speed": c["resync_fit_speed"].isChecked(),
             "formats": [f for f, cb in self.format_checks.items() if cb.isChecked()],
             "max_line_chars": c["max_line_chars"].value(),
             "max_lines": c["max_lines"].value(),
@@ -1022,7 +1130,7 @@ class UIManager(QWidget):
             if key == "formats":
                 for f, cb in self.format_checks.items():
                     cb.setChecked(f in val)
-            elif key in ("engine", "language", "task", "output_mode"):
+            elif key in ("engine", "language", "task", "output_mode", "sync_mode"):
                 self._set_combo_data(c[key], val)
             elif key in ("model", "device", "compute_type", "mux_container"):
                 self._set_combo_text(c[key], val)

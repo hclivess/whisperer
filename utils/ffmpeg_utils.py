@@ -63,8 +63,12 @@ def extract_audio(src: str, dst_wav: str, stop_check=None) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("FFmpeg not found")
+    # first_pts=0 keeps an audio stream that starts after the video (common in MKV remuxes / captures) in place by
+    # padding silence, and async=1 fills timestamp gaps, so second N of the WAV is second N of the video.
+    # Without it every cue is early by the audio start time and drifts over dropped packets.
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
-           "-i", src, "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000",
+           "-i", src, "-vn", "-sn", "-dn", "-map", "0:a:0",
+           "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", "16000",
            "-c:a", "pcm_s16le", dst_wav]
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             creationflags=_CREATE_NO_WINDOW)

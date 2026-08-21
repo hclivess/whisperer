@@ -14,6 +14,7 @@ from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
 from utils.subtitle_utils import split_segments, write_subtitles
+from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 
 try:
     import psutil
@@ -139,6 +140,8 @@ class _Worker(QThread):
         out_dir = s["output_dir"] if s["output_mode"] == "custom" and s["output_dir"] else os.path.dirname(src)
         os.makedirs(out_dir, exist_ok=True)
         stem = os.path.splitext(os.path.basename(src))[0] + (s.get("suffix") or "")
+        if s.get("sync_mode") == "resync" and not s.get("suffix"):
+            stem += ".synced"
         if s.get("language_suffix"):
             lang = s["language"]
             if lang != "auto":
@@ -194,12 +197,41 @@ class _Worker(QThread):
                 progress=on_progress, segment=on_segment, status=self.status.emit,
                 should_stop=self._stop.is_set, wait_if_paused=self._wait_if_paused,
                 set_process=self._set_process, extra={"duration": qf.duration})
-            segments, meta = BACKENDS[engine](audio_for_engine, s, cb)
+            engine_settings = dict(s)
+            if s.get("snap_to_speech") or s.get("sync_mode") == "resync":
+                engine_settings["word_timestamps"] = True      # word-level alignment is what we snap / match
+            segments, meta = BACKENDS[engine](audio_for_engine, engine_settings, cb)
             if self._stop.is_set():
                 raise StoppedError()
 
-            segments = split_segments(segments, int(s["max_line_chars"]), int(s["max_lines"]),
-                                      float(s["max_segment_seconds"]))
+            if s.get("sync_mode") == "resync":
+                sub_path = self._resync_source(src, s)
+                self.status.emit(f"Aligning {os.path.basename(sub_path)} to the audio…")
+                with open(sub_path, encoding="utf-8", errors="replace") as fh:
+                    cues = parse_subtitles(fh.read())
+                if not cues:
+                    raise RuntimeError(f"No cues found in {sub_path}")
+                segments, report = resync_cues(cues, segments, bool(s.get("resync_fit_speed", True)))
+                meta["resync"] = {"source": os.path.basename(sub_path), **report}
+                self.status.emit(f"Resync: offset {report['offset']:+.3f} s, speed {report['speed']:.5f} "
+                                 f"({report['drift_per_hour']:+.1f} s/h), {report['inliers']}/{report['matches']} words agree")
+            else:
+                segments = split_segments(segments, int(s["max_line_chars"]), int(s["max_lines"]),
+                                          float(s["max_segment_seconds"]))
+
+            if s.get("snap_to_speech"):
+                self.status.emit(f"Snapping cues to speech: {qf.name}")
+                regions = speech_regions(audio_for_engine)
+                if self._stop.is_set():
+                    raise StoppedError()
+                segments = snap_to_speech(
+                    segments, regions, max_shift=int(s.get("snap_max_shift_ms", 600)) / 1000.0,
+                    end_padding=int(s.get("end_padding_ms", 200)) / 1000.0,
+                    min_duration=int(s.get("min_cue_ms", 800)) / 1000.0, min_gap=int(s.get("min_gap_ms", 80)) / 1000.0,
+                    max_duration=float(s["max_segment_seconds"]) if s.get("sync_mode") != "resync" else 0.0)
+                meta["speech_regions"] = len(regions)
+            if int(s.get("global_offset_ms", 0)):
+                segments = shift_cues(segments, int(s["global_offset_ms"]) / 1000.0)
             meta["source"] = os.path.basename(src)
             self.status.emit(f"Writing subtitles: {qf.name}")
             outputs = write_subtitles(segments, base_path, list(s["formats"]), int(s["max_line_chars"]),
@@ -237,6 +269,26 @@ class _Worker(QThread):
                 os.rmdir(tmpdir)
             except OSError:
                 pass
+
+    @staticmethod
+    def _resync_source(src: str, s: Dict) -> str:
+        explicit = (s.get("resync_file") or "").strip()
+        if explicit:
+            if os.path.isfile(explicit):
+                return explicit
+            raise FileNotFoundError(f"Subtitle file to resync not found: {explicit}")
+        stem = os.path.splitext(src)[0]
+        folder = os.path.dirname(src) or "."
+        base = os.path.basename(stem)
+        candidates = [f"{stem}.srt", f"{stem}.vtt"]
+        for fn in sorted(os.listdir(folder)):
+            if fn.startswith(base + ".") and fn.lower().endswith((".srt", ".vtt")) and not fn.endswith(".synced.srt"):
+                candidates.append(os.path.join(folder, fn))
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        raise FileNotFoundError(f"No .srt / .vtt next to {os.path.basename(src)} to resync "
+                                "(set the file on the Sync tab)")
 
     def _set_process(self, proc):
         with self._lock:
