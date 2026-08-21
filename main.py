@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
         fm, pm, ui = self.file_manager, self.process_manager, self.ui_manager
         fm.files_updated.connect(ui.update_file_list)
         fm.file_count_changed.connect(ui.update_file_count)
+        fm.duplicates_skipped.connect(lambda n: ui.update_status(f"{n} file(s) already in the queue — skipped"))
         fm.files_updated.connect(self._on_files_updated_during_processing)
 
         pm.progress_updated.connect(ui.update_progress)

@@ -24,6 +24,7 @@ class QueueFile:
 class FileManager(QObject):
     files_updated = Signal(list)
     file_count_changed = Signal(int)
+    duplicates_skipped = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -33,16 +34,26 @@ class FileManager(QObject):
         self.files_updated.emit(self._files)
         self.file_count_changed.emit(len(self._files))
 
+    @staticmethod
+    def _norm(p: str) -> str:
+        return os.path.normcase(os.path.abspath(p))
+
     def add_files(self, paths: List[str]) -> int:
-        existing = {f.path for f in self._files}
+        existing = {self._norm(f.path) for f in self._files}
         added = 0
+        self.last_duplicates = 0
         for p in collect_media_files(paths):
-            if p not in existing:
-                self._files.append(QueueFile(p))
-                existing.add(p)
-                added += 1
+            key = self._norm(p)
+            if key in existing:
+                self.last_duplicates += 1
+                continue
+            self._files.append(QueueFile(p))
+            existing.add(key)
+            added += 1
         if added:
             self._emit()
+        if self.last_duplicates:
+            self.duplicates_skipped.emit(self.last_duplicates)
         return added
 
     def remove_files(self, indices: List[int]):

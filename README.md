@@ -116,6 +116,11 @@ enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the o
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.3.4
+
+- Queue: files already queued are skipped with a status message (paths compared case-/form-insensitively); folder
+  scans are in natural order folder by folder (`ep2` before `ep10`).
+
 ## Changes in 1.3.3
 
 - **No orphaned helpers**: every ffmpeg / whisper-cli we start is tracked and killed when the app quits — including
