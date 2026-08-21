@@ -85,18 +85,37 @@ def extract_audio(src: str, dst_wav: str, stop_check=None) -> None:
         raise RuntimeError(f"FFmpeg failed to extract audio: {err.decode(errors='replace').strip()}")
 
 
-def mux_subtitles(video: str, subtitle: str, output: str, container: str, language: str) -> None:
-    """Copy the video streams and add the subtitle file as a soft subtitle track"""
+def mux_subtitles(video: str, subtitle: str, output: str, container: str, language: str, stop_check=None) -> None:
+    """Copy the video streams and add the subtitle file as a soft subtitle track.
+    Writes to a temporary name and renames on success, so a stopped or failed mux never leaves a partial video."""
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise RuntimeError("FFmpeg not found")
     codec = {"mkv": "srt", "mp4": "mov_text"}.get(container, "srt")
     lang = language if language and language != "auto" else "und"
+    tmp = f"{os.path.splitext(output)[0]}.part.{container}"
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostdin",
            "-i", video, "-i", subtitle,
            "-map", "0", "-map", "1:0", "-c", "copy", "-c:s", codec,
            "-metadata:s:s:0", f"language={lang}", "-disposition:s:0", "default",
-           output]
-    proc = subprocess.run(cmd, capture_output=True, creationflags=_CREATE_NO_WINDOW)
-    if proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg failed to mux subtitles: {proc.stderr.decode(errors='replace').strip()}")
+           "-f", {"mkv": "matroska", "mp4": "mp4"}.get(container, "matroska"), tmp]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, creationflags=_CREATE_NO_WINDOW)
+    try:
+        while True:
+            try:
+                _, err = proc.communicate(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if stop_check and stop_check():
+                    proc.kill()
+                    proc.wait()
+                    raise InterruptedError("Muxing stopped")
+        if proc.returncode != 0:
+            raise RuntimeError(f"FFmpeg failed to mux subtitles: {err.decode(errors='replace').strip()}")
+        os.replace(tmp, output)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

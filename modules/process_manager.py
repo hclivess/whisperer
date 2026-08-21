@@ -256,7 +256,7 @@ class _Worker(QThread):
                 lang = meta.get("language") or s["language"]
                 if s["task"] == "translate":
                     lang = "en"
-                mux_subtitles(src, srt, muxed, container, lang)
+                mux_subtitles(src, srt, muxed, container, lang, stop_check=self._stop.is_set)
                 outputs.append(muxed)
 
             self.file_progress.emit(1000)

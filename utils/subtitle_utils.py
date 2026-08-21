@@ -189,7 +189,16 @@ def write_subtitles(segments: List[Dict], base_path: str, formats: List[str],
             data = to_json(segments, meta)
         else:
             continue
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(data)
+        tmp = path + ".part"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(data)
+            os.replace(tmp, path)          # never leave a half-written subtitle under the real name
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
         written.append(path)
     return written

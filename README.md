@@ -116,6 +116,11 @@ enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the o
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.3.2
+
+- Subtitle files are written to a temporary name and renamed when complete; the muxed `.subbed.mkv/.mp4` likewise,
+  and Stop now interrupts the mux. No partial output is ever left under the final name.
+
 ## Changes in 1.3.1
 
 - **Capitalise sentence starts** (Subtitles tab, on by default): Whisper emits a lower-case first word when the audio
