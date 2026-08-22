@@ -156,3 +156,41 @@ def test_merge_windows_groups_neighbours_into_whole_encoder_windows():
     assert merge_windows([(10.0, 12.0), (400.0, 402.0)]) == [(0.0, 30.0), (390.0, 420.0)]
     assert merge_windows([(95.0, 99.0)], duration=97.0) == [(90.0, 97.0)]
     assert merge_windows([]) == []
+
+
+def test_a_replacement_keeps_words_that_sit_just_outside_the_cue():
+    from utils.verify_utils import resolve_passes
+    # the passes cut segments in slightly different places: pass 2's last word ends after the cue does.
+    # Taking only the exact span used to drop it from the file altogether.
+    first = [{"start": 0.0, "end": 2.0, "text": "alpha bravo charlie", "avg_logprob": -1.6,
+              "compression_ratio": 2.9,
+              "words": [{"start": 0.0, "end": 0.6, "word": "alpha"}, {"start": 0.7, "end": 1.3, "word": " bravo"},
+                        {"start": 1.4, "end": 2.0, "word": " charlie"}]},
+             seg(3.0, 5.0, "delta echo foxtrot", avg_logprob=-0.1)]
+    second = [{"start": 0.0, "end": 2.5, "text": "sierra kilo tango", "avg_logprob": -0.1,
+               "words": [{"start": 0.0, "end": 0.6, "word": "sierra"}, {"start": 0.7, "end": 1.3, "word": " kilo"},
+                         {"start": 2.1, "end": 2.5, "word": " tango"}]},   # middle at 2.3, past the cue end
+              seg(3.0, 5.0, "delta echo foxtrot", avg_logprob=-0.1)]
+    out, report, _ = resolve_passes([decode(first), decode(second)], [(0.0, 5.0)])
+    assert report["scored"] == 1
+    assert out[0]["text"] == "sierra kilo tango"           # nothing dropped at the boundary
+    assert out[1]["text"] == "delta echo foxtrot"          # and nothing borrowed from the neighbour
+
+
+def test_a_long_cue_with_real_speech_in_it_is_not_voted_away():
+    from utils.verify_utils import resolve_passes
+    # a 6 s cue holding 1.2 s of speech: the fraction is low, the words are real, and one pass missing it
+    # must not be enough to delete it
+    first = [seg(0.0, 6.0, "yes exactly")]
+    second = [{"segments": [], "covers": None}]
+    out, report, _ = resolve_passes([decode(first), second[0]], [(2.0, 3.2)])
+    assert len(out) == 1 and report["dropped"] == 0
+
+
+def test_a_cue_over_real_silence_is_still_dropped():
+    from utils.verify_utils import resolve_passes
+    first = [seg(0.0, 3.0, "the interview starts here"), seg(58.0, 62.0, "Thank you for watching this video")]
+    second = [seg(0.0, 3.0, "the interview starts here")]
+    out, report, _ = resolve_passes([decode(first), decode(second)], [(0.0, 3.2), (59.0, 59.1)])
+    assert [s["text"] for s in out] == ["the interview starts here"]
+    assert report["dropped"] == 1

@@ -286,3 +286,60 @@ def test_enforce_min_duration_leaves_a_run_it_cannot_fix_alone():
     out = enforce_min_duration(cues, min_duration=0.8, min_gap=0.08)
     assert [round(c["start"], 3) for c in out] == [0.0, 0.88, 1.06]
     assert [round(c["end"], 3) for c in out] == [0.8, 0.98, 1.86]
+
+
+def _spoken(tokens, gaps=None, start=0.0, word_seconds=0.3, gap=0.05):
+    """A segment whose words carry real timings, with `gaps` overriding the silence before a word."""
+    gaps, words, t = gaps or {}, [], start
+    for i, tok in enumerate(tokens):
+        t += gaps.get(i, gap)
+        words.append({"start": round(t, 2), "end": round(t + word_seconds, 2), "word": (" " if i else "") + tok})
+        t += word_seconds
+    return {"start": words[0]["start"], "end": words[-1]["end"], "text": " ".join(tokens), "words": words}
+
+
+def test_repair_sentence_starts_lowers_a_capital_nobody_paused_for():
+    from utils.subtitle_utils import repair_sentence_starts
+    # Whisper starts every 30 s window as a fresh utterance: "a rebuke to A stale order"
+    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order"])
+    out = repair_sentence_starts([seg], 0.25)
+    assert out[0]["text"] == "a rebuke to a stale order"
+    assert out[0]["words"][3]["word"] == " a"          # the word list is kept in step with the text
+
+
+def test_repair_sentence_starts_closes_a_sentence_the_speaker_finished():
+    from utils.subtitle_utils import repair_sentence_starts
+    seg = _spoken(["we", "left", "the", "building", "Then", "it", "rained", "and", "then", "we", "went"],
+                 gaps={4: 0.9})
+    out = repair_sentence_starts([seg], 0.25)
+    assert out[0]["text"] == "we left the building. Then it rained and then we went"
+
+
+def test_repair_sentence_starts_never_invents_a_stop_after_a_weak_word():
+    from utils.subtitle_utils import repair_sentence_starts
+    # the pause is real, but Whisper cuts its windows at silences - "a rebuke to. A stale order" is worse
+    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order", "or", "a", "stale", "idea"], gaps={3: 0.9})
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "a rebuke to A stale order or a stale idea"
+
+
+def test_repair_sentence_starts_leaves_names_and_i_alone():
+    from utils.subtitle_utils import repair_sentence_starts
+    seg = _spoken(["we", "asked", "Bismuth", "about", "it", "and", "I", "agreed"])
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "we asked Bismuth about it and I agreed"
+    initials = _spoken(["signed", "by", "J.", "R.", "Smith", "yesterday"])
+    assert repair_sentence_starts([initials], 0.25)[0]["text"] == "signed by J. R. Smith yesterday"
+
+
+def test_repair_sentence_starts_needs_word_timestamps():
+    from utils.subtitle_utils import repair_sentence_starts
+    plain = [{"start": 0.0, "end": 3.0, "text": "a rebuke to A stale order"}]
+    assert repair_sentence_starts(plain, 0.25) == plain      # nothing measured, nothing changed
+    mismatched = [{"start": 0.0, "end": 1.0, "text": "a rebuke to A stale order",
+                   "words": [{"start": 0.0, "end": 1.0, "word": "something else entirely"}]}]
+    assert repair_sentence_starts(mismatched, 0.25) == mismatched
+
+
+def test_repair_sentence_starts_ignores_a_capital_after_a_full_stop():
+    from utils.subtitle_utils import repair_sentence_starts
+    seg = _spoken(["that", "was", "the", "end.", "And", "then", "the", "end", "was", "the", "end"])
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "that was the end. And then the end was the end"

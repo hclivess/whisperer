@@ -711,6 +711,17 @@ class UIManager(QWidget):
             "with less silence around it than below is the model's invention: it is removed and the next word goes "
             "back to lower case. Names and \"I\" keep their capital. Needs word timestamps (on automatically).")
         grid.addWidget(self.controls["repair_sentence_breaks"], 5, 0, 1, 2)
+        self.controls["repair_sentence_starts"] = QCheckBox("Settle capitals with no full stop in front of them")
+        self.controls["repair_sentence_starts"].setChecked(True)
+        self.controls["repair_sentence_starts"].setToolTip(
+            "The other half of the same idea. Whisper decodes in 30 second windows and starts each one as if it "
+            "were a fresh utterance, so it writes capitals inside a phrase (\"a rebuke to A stale order\") and "
+            "sometimes ends a window without the full stop the sentence needed. The pause below decides which "
+            "happened: a real silence means the speaker did stop and the full stop is added, no silence means the "
+            "capital is the window boundary and it goes back to lower case. Nothing is invented after a word a "
+            "sentence does not end on (\"to\", \"the\", \"and\"), and a word this transcript never writes in "
+            "lower case may be a name, so it keeps its capital. Needs word timestamps (on automatically).")
+        grid.addWidget(self.controls["repair_sentence_starts"], 6, 0, 1, 2)
         self.controls["sentence_pause_ms"] = QSpinBox()
         self.controls["sentence_pause_ms"].setRange(0, 2000)
         self.controls["sentence_pause_ms"].setSingleStep(50)
@@ -719,8 +730,8 @@ class UIManager(QWidget):
         self.controls["sentence_pause_ms"].setToolTip("Silence a full stop needs to be believed. Raise it for a "
                                                       "speaker who runs sentences together, lower it if real "
                                                       "sentence ends are being joined.")
-        grid.addWidget(QLabel("Shortest pause between sentences:"), 6, 0)
-        grid.addWidget(self.controls["sentence_pause_ms"], 6, 1)
+        grid.addWidget(QLabel("Shortest pause between sentences:"), 7, 0)
+        grid.addWidget(self.controls["sentence_pause_ms"], 7, 1)
         layout_group.setLayout(grid)
         layout.addWidget(layout_group)
 
@@ -1166,6 +1177,7 @@ class UIManager(QWidget):
             "capitalize_sentences": c["capitalize_sentences"].isChecked(),
             "strip_foreign_script": c["strip_foreign_script"].isChecked(),
             "repair_sentence_breaks": c["repair_sentence_breaks"].isChecked(),
+            "repair_sentence_starts": c["repair_sentence_starts"].isChecked(),
             "sentence_pause_ms": c["sentence_pause_ms"].value(),
             "output_mode": c["output_mode"].currentData(),
             "output_dir": c["output_dir"].text().strip(),
