@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         pm.stats_updated.connect(ui.update_stats)
         pm.file_state_changed.connect(ui.set_file_state)
         pm.segment_ready.connect(ui.append_segment)
+        pm.transcript_ready.connect(ui.replace_transcript)
         pm.file_started.connect(ui.on_file_started)
         pm.paused_state_changed.connect(ui.set_paused_state)
         pm.processing_finished.connect(self.on_processing_finished)

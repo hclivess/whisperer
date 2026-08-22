@@ -2,6 +2,7 @@
 UI Manager for whisperer — builds the window (queue + progress on the left, settings tabs +
 live transcript on the right) and translates between widgets and the settings dict.
 """
+import html
 import os
 from typing import Any, Dict, List
 
@@ -11,7 +12,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheck
                                QGridLayout, QFrame, QSizePolicy, QMessageBox, QPlainTextEdit, QTextEdit,
                                QFormLayout, QScrollArea)
 from PySide6.QtCore import Qt, Signal, QSettings
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QColor, QBrush, QDesktopServices
+from PySide6.QtGui import (QAction, QDragEnterEvent, QDropEvent, QColor, QBrush, QDesktopServices,
+                           QTextCursor)
 from PySide6.QtCore import QUrl
 
 from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUTE_TYPES, LANGUAGES,
@@ -96,6 +98,7 @@ class UIManager(QWidget):
         self.main_window = main_window
         self.controls: Dict[str, Any] = {}
         self._files = []
+        self._transcript_blocks: List[Dict[str, Any]] = []
         self._processing_active = False
 
     # ------------------------------------------------------------------
@@ -315,7 +318,7 @@ class UIManager(QWidget):
         self.transcript_info = QLabel("")
         self.transcript_info.setStyleSheet("color: #666; font-size: 11px;")
         clear_btn = QPushButton("Clear")
-        clear_btn.clicked.connect(self.transcript.clear)
+        clear_btn.clicked.connect(self._clear_transcript)
         trow.addWidget(self.transcript_info, 1)
         trow.addWidget(clear_btn)
         tl.addLayout(trow)
@@ -1079,6 +1082,48 @@ class UIManager(QWidget):
         self.status_label.setText(message)
         self.main_window.statusBar().showMessage(message, 8000)
 
+    def _clear_transcript(self):
+        self._transcript_blocks.clear()
+        self.transcript.clear()
+
+    def _follow_transcript(self):
+        """Keep the cursor on the newest line, so the view follows the work by itself."""
+        cursor = self.transcript.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.transcript.setTextCursor(cursor)
+        self.transcript.ensureCursorVisible()
+        sb = self.transcript.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _transcript_line(self, seg: Dict) -> str:
+        text = html.escape(str(seg.get("text", "")).replace("\n", " "))
+        return (f"<span style='color:#888'>[{format_duration(seg['start'])} → "
+                f"{format_duration(seg['end'])}]</span> {text}")
+
+    def _render_transcript(self):
+        parts = []
+        for block in self._transcript_blocks:
+            parts.append(f"<b>— {html.escape(block['name'])} —</b>"
+                         + ("  <span style='color:#888'>(written)</span>" if block["final"] else ""))
+            parts.extend(block["lines"])
+        self.transcript.setHtml("<br>".join(parts))
+        self._follow_transcript()
+
+    def replace_transcript(self, index: int, segments: list):
+        """
+        Swap the first decode out for the cues that were written.
+
+        The pane fills from the first pass while the file is still being worked on - before the other
+        passes have had their say, before the repairs, the splitting and the snapping - so what it shows
+        until now is not what ends up in the file. Once the file is written, it shows that instead.
+        """
+        for block in reversed(self._transcript_blocks):
+            if block["index"] == index:
+                block["lines"] = [self._transcript_line(seg) for seg in segments]
+                block["final"] = True
+                self._render_transcript()
+                return
+
     def on_file_started(self, index: int, name: str):
         self.current_file_label.setText(name)
         self.counter_label.setText(f"{index + 1} / {len(self._files)}")
@@ -1087,7 +1132,8 @@ class UIManager(QWidget):
         self.file_progress_bar.setValue(0)
         for t in (self.stat_speed, self.stat_position, self.stat_duration, self.stat_segments):
             t.setText("--")
-        self.transcript.append(f"<b>— {name} —</b>")
+        self._transcript_blocks.append({"index": index, "name": name, "lines": [], "final": False})
+        self.transcript.append(f"<b>— {html.escape(name)} —</b>")
 
     def update_stats(self, snap: Dict[str, Any]):
         if "speed" in snap:
@@ -1107,11 +1153,12 @@ class UIManager(QWidget):
         if "device" in snap:
             self.stat_device.setText(snap["device"])
 
-    def append_segment(self, _index: int, seg: Dict):
-        self.transcript.append(f"<span style='color:#888'>[{format_duration(seg['start'])} → "
-                               f"{format_duration(seg['end'])}]</span> {seg['text']}")
-        sb = self.transcript.verticalScrollBar()
-        sb.setValue(sb.maximum())
+    def append_segment(self, index: int, seg: Dict):
+        line = self._transcript_line(seg)
+        if self._transcript_blocks and self._transcript_blocks[-1]["index"] == index:
+            self._transcript_blocks[-1]["lines"].append(line)
+        self.transcript.append(line)
+        self._follow_transcript()
 
     def set_file_state(self, index: int, state: str, message: str = ""):
         if 0 <= index < len(self._files):

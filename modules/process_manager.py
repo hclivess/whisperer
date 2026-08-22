@@ -33,6 +33,7 @@ class _Worker(QThread):
     stats = Signal(dict)
     file_state = Signal(int, str, str)          # index, state, message
     segment = Signal(int, dict)                 # index, segment dict
+    transcript = Signal(int, list)              # index, the cues actually written
     file_started = Signal(int, str)             # index, name
     finished_all = Signal(int, int)             # success, total
     paused_changed = Signal(bool)
@@ -366,6 +367,9 @@ class _Worker(QThread):
             self.status.emit(f"Writing subtitles: {qf.name}")
             outputs = write_subtitles(segments, base_path, list(s["formats"]), int(s["max_line_chars"]),
                                       int(s["max_lines"]), meta, bool(s["overwrite"]))
+            # the live pane has been showing the first decode all this time; hand it what was written
+            self.transcript.emit(index, [{"start": float(c["start"]), "end": float(c["end"]),
+                                          "text": c.get("text", "")} for c in segments])
 
             if s.get("mux_subtitles"):
                 srt = f"{base_path}.srt"
@@ -440,6 +444,7 @@ class ProcessManager(QObject):
     stats_updated = Signal(dict)
     file_state_changed = Signal(int, str, str)
     segment_ready = Signal(int, dict)
+    transcript_ready = Signal(int, list)
     file_started = Signal(int, str)
     processing_finished = Signal(int, int)
     paused_state_changed = Signal(bool)
@@ -495,6 +500,7 @@ class ProcessManager(QObject):
         w.stats.connect(self.stats_updated)
         w.file_state.connect(self.file_state_changed)
         w.segment.connect(self.segment_ready)
+        w.transcript.connect(self.transcript_ready)
         w.file_started.connect(self.file_started)
         w.finished_all.connect(self._on_finished)
         w.paused_changed.connect(self.paused_state_changed)

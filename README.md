@@ -145,6 +145,17 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.7
+
+- **The Live Transcript now shows what was written.** It filled from the first decode and was never touched
+  again — before the other passes had had their say, before the repairs, the splitting, the snapping and
+  the merging — so what it showed was not what ended up in the file, and a first pass that came apart
+  looked alarming there long after the written subtitles were fine. When a file is finished its block in
+  the pane is replaced with the cues actually written, and marked *(written)*.
+- **The view follows the work.** The cursor moves to the newest line on every update, so the pane scrolls
+  by itself while a file is being transcribed and after it is rewritten.
+- Cue text is HTML-escaped on the way into the pane.
+
 ## Changes in 1.7.6
 
 - **A pass that has come apart is judged over the whole decode, not line by line.** The Title-Case guard
