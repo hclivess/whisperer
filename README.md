@@ -142,6 +142,13 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.6.1
+
+- **Fixed: the third way multi-pass could drop a word.** A pass aimed at a few windows has hard edges — a
+  cue lying across one of them was decoded up to the cut and no further. Such a pass could still win the
+  cue on score and hand over its truncated text, losing the words past the cut. It may still vote (it heard
+  most of the cue), but only a pass that heard a cue's whole stretch may supply its text.
+
 ## Changes in 1.6.0
 
 - **Fixed: multi-pass verification could drop words.** Two ways, both now closed. A replaced cue took only

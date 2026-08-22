@@ -194,3 +194,15 @@ def test_a_cue_over_real_silence_is_still_dropped():
     out, report, _ = resolve_passes([decode(first), decode(second)], [(0.0, 3.2), (59.0, 59.1)])
     assert [s["text"] for s in out] == ["the interview starts here"]
     assert report["dropped"] == 1
+
+
+def test_a_windowed_pass_never_supplies_text_for_a_cue_it_only_half_heard():
+    from utils.verify_utils import resolve_passes
+    # a pass aimed at 0-30 s stops mid-cue at 30 s: it may vote, but its truncated text must not replace
+    # the cue, or the words past the cut are lost
+    first = [seg(28.0, 32.0, "Ying and Yang and the whole of it", avg_logprob=-1.5, compression_ratio=2.8)]
+    second = [seg(28.0, 32.0, "Ying and Yang and the whole of it", avg_logprob=-1.5)]
+    third = decode([seg(28.0, 30.0, "Ying and", avg_logprob=-0.05)], covers=[(0.0, 30.0)])
+    out, report, _ = resolve_passes([decode(first), decode(second), third], [(28.0, 32.0)])
+    assert out[0]["text"] == "Ying and Yang and the whole of it"
+    assert report["dropped"] == 0
