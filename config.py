@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.4.0"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -71,6 +71,7 @@ DEFAULT_SETTINGS = {
     "beam_size": 5,
     "word_timestamps": False,
     "condition_on_previous_text": True,
+    "second_pass": True,            # transcribe twice and keep what both decodes agree on
     "initial_prompt": "",
     "extra_args": "",
     # Sync

@@ -153,6 +153,11 @@ def transcribe_faster_whisper(audio_path: str, settings: Dict, cb: TranscribeCal
         if cb.should_stop():
             raise StoppedError()
         d = {"start": float(seg.start), "end": float(seg.end), "text": seg.text.strip()}
+        # what the decoder thought of its own output: the second pass and the hallucination checks need it
+        for field in ("avg_logprob", "no_speech_prob", "compression_ratio", "temperature"):
+            value = getattr(seg, field, None)
+            if value is not None:
+                d[field] = round(float(value), 4)
         if seg.words:
             d["words"] = [{"start": float(w.start), "end": float(w.end), "word": w.word} for w in seg.words]
         segments.append(d)
