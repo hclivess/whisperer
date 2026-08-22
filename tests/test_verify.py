@@ -236,3 +236,60 @@ def test_low_confidence_cues_are_listed_for_a_human():
                 seg(2.0, 4.0, "mumbled through a scarf", avg_logprob=-1.3)]
     text = "\n".join(review_lines(report, segments))
     assert "mumbled through a scarf" in text and "clear as day" not in text
+
+
+def test_a_decode_that_has_come_apart_never_replaces_clean_text():
+    from utils.verify_utils import resolve_passes
+    # the wreckage a prompt-imitating or over-sampled pass produces: Title Case, a comma after every word,
+    # the same word twice. It can carry a fine avg_logprob, so only the text itself gives it away.
+    clean = [seg(0.0, 4.0, "and she was still referring to him as a baby", avg_logprob=-0.9)]
+    junk = [seg(0.0, 4.0, "And, She, Was, Still, Referring, To, Him, As, A, Baby,", avg_logprob=-0.05)]
+    out, report, _ = resolve_passes([decode(clean), decode(junk)], [(0.0, 4.0)])
+    assert out[0]["text"] == "and she was still referring to him as a baby"
+    assert report["scored"] == 0
+
+
+def test_a_majority_of_degenerate_passes_still_does_not_win():
+    from utils.verify_utils import resolve_passes
+    # the speaker really does repeat himself here - what is wrong with the rival is the Title Case
+    clean = [seg(0.0, 4.0, "that's that's unsuccessful right that's that's chaos", avg_logprob=-0.9)]
+    junk1 = [seg(0.0, 4.0, "That's That's Unsuccessful Right That's That's Chaos", avg_logprob=-0.1)]
+    junk2 = [seg(0.0, 4.0, "That's That's Unsuccessful Right That's That's Chaos", avg_logprob=-0.1)]
+    out, report, _ = resolve_passes([decode(clean), decode(junk1), decode(junk2)], [(0.0, 4.0)])
+    assert out[0]["text"] == "that's that's unsuccessful right that's that's chaos"
+    assert report["majority"] == 0
+
+
+def test_a_clean_reading_still_replaces_a_degenerate_first_pass():
+    from utils.verify_utils import resolve_passes
+    junk = [seg(0.0, 4.0, "He's, He's, The, Light, Bringer, He's, He's", avg_logprob=-0.9)]
+    clean = [seg(0.0, 4.0, "he's he's the light bringer he's he's", avg_logprob=-0.2)]
+    out, report, _ = resolve_passes([decode(junk), decode(clean)], [(0.0, 4.0)])
+    assert out[0]["text"] == "he's he's the light bringer he's he's"   # the stutter is his, keep it
+    assert report["cleaned"] + report["scored"] == 1
+
+
+def test_junk_score_judges_the_rendering_and_never_the_words():
+    from utils.verify_utils import _junk
+    assert _junk("and she was still referring to him as a baby") == 0.0
+    assert _junk("Well, that's something living, right? A fully formed entity") == 0.0
+    assert _junk("And, She, Was, Still, Referring, To, Him, As, A, Baby,") > 0.9
+    assert _junk("That's That's Unsuccessful Right That's That's Chaos") > 0.3   # Title Case, not the words
+    # people stutter, and people pause: both belong to the speaker, neither is a defect
+    assert _junk("that's, that's unsuccessful, right, that's chaos, that's chaos") == 0.0
+    assert _junk("it's it's a it's it's a fully formed entity") == 0.0
+    assert _junk("and, she, was, still, referring, to, him, as, a, baby,") == 0.0
+
+
+def test_a_replaced_cue_does_not_repeat_contractions():
+    from utils.verify_utils import resolve_passes
+    # "he's" tokenises to he + s, and one entry per token put the word into a replaced cue's text once per
+    # token. A stutter the speaker really made must survive; one this module invents must not.
+    base = [seg(0.0, 4.0, "and that's chaos and it's the whole point", avg_logprob=-1.7,
+                compression_ratio=2.9)]
+    rival = [seg(0.0, 4.0, "and that's chaos and it's the whole thing", avg_logprob=-0.05)]
+    out, report, _ = resolve_passes([decode(base), decode(rival)], [(0.0, 4.0)])
+    text = out[0]["text"]
+    words = text.split()
+    assert not any(a == b for a, b in zip(words, words[1:])), text
+    assert text.count("that's") == 1 and text.count("it's") == 1

@@ -343,3 +343,44 @@ def test_repair_sentence_starts_ignores_a_capital_after_a_full_stop():
     from utils.subtitle_utils import repair_sentence_starts
     seg = _spoken(["that", "was", "the", "end.", "And", "then", "the", "end", "was", "the", "end"])
     assert repair_sentence_starts([seg], 0.25)[0]["text"] == "that was the end. And then the end was the end"
+
+
+def test_repair_sentence_starts_works_across_segment_boundaries():
+    from utils.subtitle_utils import repair_sentence_starts
+    # the common shape: Whisper ends a window without the full stop and opens the next one with a capital
+    first = _spoken(["and", "that's", "the", "echo"])
+    second = _spoken(["So", "which", "is", "why", "the", "echo", "and", "so", "on"], start=first["end"] + 0.9)
+    out = repair_sentence_starts([first, second], 0.25)
+    assert out[0]["text"] == "and that's the echo."
+    assert out[1]["text"] == "So which is why the echo and so on"
+
+
+def test_repair_sentence_starts_lowers_across_a_boundary_when_nobody_paused():
+    from utils.subtitle_utils import repair_sentence_starts
+    first = _spoken(["it", "was", "the", "concept"])
+    second = _spoken(["And", "which", "is", "and", "so"], start=first["end"] + 0.06)
+    out = repair_sentence_starts([first, second], 0.25)
+    assert out[0]["text"] == "it was the concept"      # no full stop invented after "concept"...
+    assert out[1]["text"] == "and which is and so"     # ...the capital was the window boundary
+
+
+def test_repair_sentence_starts_survives_one_odd_segment():
+    from utils.subtitle_utils import repair_sentence_starts
+    # a segment whose word list does not spell its text ("[MUSIC]") cannot be edited - but it must not
+    # silence the repair for the rest of the file, which is what one such segment used to do
+    first = _spoken(["it", "was", "the", "concept"])
+    odd = {"start": first["end"] + 0.1, "end": first["end"] + 0.5, "text": "[MUSIC]",
+           "words": [{"start": first["end"] + 0.1, "end": first["end"] + 0.5, "word": " music"}]}
+    second = _spoken(["And", "which", "is", "and", "so"], start=odd["end"] + 0.06)
+    out = repair_sentence_starts([first, odd, second], 0.25)
+    assert out[1]["text"] == "[MUSIC]"                 # untouched, as it must be
+    assert out[2]["text"] == "and which is and so"     # and the rest is still repaired
+
+
+def test_repair_sentence_starts_measures_nothing_across_a_segment_without_timings():
+    from utils.subtitle_utils import repair_sentence_starts
+    first = _spoken(["it", "was", "the", "concept"])
+    blind = {"start": first["end"] + 0.1, "end": first["end"] + 3.0, "text": "no word timings here"}
+    second = _spoken(["And", "which", "is", "and", "so"], start=blind["end"] + 0.06)
+    out = repair_sentence_starts([first, blind, second], 0.25)
+    assert [s["text"] for s in out] == [first["text"], blind["text"], second["text"]]

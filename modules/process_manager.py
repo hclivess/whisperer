@@ -241,12 +241,19 @@ class _Worker(QThread):
                     self.status.emit(f"Pass {n} of {wanted}: "
                                      + (f"re-checking {len(spans)} unresolved window(s)" if spans
                                         else f"decoding {qf.name} again"))
+                    # deterministic variation first, sampling only when the beams run out: a sampled decode
+                    # is likelier to come apart (Title Case, a comma after every word, stutters), and a pass
+                    # that has come apart is a pass whose vote and text are worth less
+                    beam = int(s.get("beam_size", 5))
+                    ladder = [(1, None), (5, None), (3, None), (2, 0.2), (4, 0.4)]
+                    ladder = [v for v in ladder if not (v[1] is None and v[0] == beam)]
+                    variant = ladder[(n - 2) % len(ladder)]
                     pass_settings = dict(engine_settings)
                     pass_settings["condition_on_previous_text"] = False
-                    pass_settings["beam_size"] = 1 if int(s.get("beam_size", 5)) > 1 else 5
+                    pass_settings["beam_size"] = variant[0]
                     pass_settings["hotwords"] = learned
-                    if n > 2:
-                        pass_settings["temperature"] = round(0.2 * (n - 2), 2)
+                    if variant[1] is not None:
+                        pass_settings["temperature"] = variant[1]
                     if spans:
                         pass_settings["clip_spans"] = spans
                     extra, _extra_meta = BACKENDS[engine](audio_for_engine, pass_settings, cb)

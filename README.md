@@ -143,6 +143,27 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.1
+
+- **Fixed: one odd segment switched the capital repair off for the whole file.** A segment whose word list
+  does not spell its text — a `[MUSIC]` cue, a backend oddity — cannot be edited through its words, and the
+  repair gave up on the *entire file* at the first one it met. In a fifty-minute lecture that is close to
+  certain, so in practice the repair often did nothing at all. Such a segment is now simply left alone
+  (pauses across it are still not measured, since it has nothing reliable to measure) and every other
+  segment is repaired as it should have been.
+- **Fixed: a replaced cue could repeat a contraction.** A word was carried through the comparison once per
+  token it splits into, and *"he's"* splits into two, so a cue the verifier replaced could come back with
+  the word twice. A word is one entry now, whatever it tokenises to.
+- **A Title-Cased reading can no longer take over a cue.** Capitals On Every Word is what a pass looks like
+  when it imitates a prompt or a sample goes wrong, and it can carry a *good* confidence score while doing
+  it. Such a reading is refused even when it wins the vote; and where the first pass is the Title-Cased one
+  and another pass says the same words in ordinary prose, the cleaner rendering is taken.
+- Repeated words and heavy comma use are **never** treated as defects: people stutter, and a speaker who
+  pauses that often has earned the commas. Only the rendering is judged, never the words.
+- Later passes now vary by **beam before temperature** — a sampled decode is likelier to come apart — and
+  the learned vocabulary goes to the decoder as hotwords rather than as a prompt (1.7.0), because a prompt
+  that is a comma-separated list of capitalised names is a style the model will imitate.
+
 ## Changes in 1.7.0
 
 - **Hotwords** (Transcription tab): terms to weight decoding towards, without the *Initial prompt*'s side effects.

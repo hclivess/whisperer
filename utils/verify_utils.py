@@ -37,18 +37,28 @@ MARGIN = 0.25
 # Agreeing passes that still worded a cue differently below this are worth a line in the review list: a
 # meaning-changing mis-hearing ("mating game" heard as "marriage") is a partial disagreement, not a fight.
 WORDING = 0.9
+# How much uglier than the text it would replace a reading may be before it is refused outright.
+JUNK_MARGIN = 0.3
 
 
 def _words(segments: Sequence[Dict]) -> List[Dict]:
-    """Flat (start, end, token, word) stream; segments without word timestamps are interpolated."""
+    """
+    One entry per spoken word: its timing, the word as written, and the tokens it compares as.
+
+    A word is one entry even when it tokenises to several ("he's" -> he, s). Emitting one entry per token
+    put the word into the text once for each token it produced, which is where "That's That's" and "It's
+    It's" came from in replaced cues - not from the decoder, from here.
+    """
     out: List[Dict] = []
     for seg in segments:
         words = seg.get("words") or []
         if words:
             for w in words:
-                for tok in _tokens(w["word"]):
-                    out.append({"start": float(w["start"]), "end": float(w["end"]),
-                                "tok": tok, "word": w["word"], "raw": w})
+                toks = _tokens(w["word"])
+                if not toks:
+                    continue
+                out.append({"start": float(w["start"]), "end": float(w["end"]),
+                            "toks": toks, "word": w["word"], "raw": w})
         else:
             toks = _tokens(seg.get("text", ""))
             if not toks:
@@ -57,7 +67,7 @@ def _words(segments: Sequence[Dict]) -> List[Dict]:
             step = (end - start) / len(toks)
             for i, tok in enumerate(toks):
                 out.append({"start": start + i * step, "end": start + (i + 1) * step,
-                            "tok": tok, "word": tok, "raw": None})
+                            "toks": [tok], "word": tok, "raw": None})
     return out
 
 
@@ -112,6 +122,27 @@ def _covers(decode: Dict, start: float, end: float) -> bool:
     if not covers:
         return True
     return any(min(end, c_end) - max(start, c_start) > 0.1 for c_start, c_end in covers)
+
+
+def _junk(text: str) -> float:
+    """
+    How degenerate a reading looks, from the text alone. 0 is ordinary prose.
+
+    Only one thing is counted: Capitals On Every Word. A decode that has come apart goes to Title Case -
+    Whisper does it when it imitates a prompt or when sampling goes wrong - and the wreckage can still
+    carry a good avg_logprob, the model being confidently sure of a simple pattern, so confidence alone
+    never catches it.
+
+    What is deliberately NOT counted is anything that could be the speaker. Repeated words are speech:
+    people stutter, and "that's, that's unsuccessful, right" is often exactly what was said. Commas are
+    speech too: a speaker who pauses that often has earned them. A transcript that keeps both is the
+    correct one. The rendering is judged here, never the words.
+    """
+    words = [w for w in text.replace("\n", " ").split() if any(ch.isalnum() for ch in w)]
+    if len(words) < 4:
+        return 0.0
+    caps = sum(1 for w in words[1:] if w[:1].isupper()) / (len(words) - 1)
+    return caps if caps > 0.6 else 0.0
 
 
 def _fully_seen(decode: Dict, start: float, end: float) -> bool:
@@ -187,7 +218,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
     on them - the score decides them meanwhile, and they are counted as unresolved either way.
     """
     report = {"passes": len(decodes), "checked": 0, "confirmed": 0, "majority": 0, "scored": 0,
-              "dropped": 0, "added": 0, "unresolved": 0, "removed": [], "review": []}
+              "cleaned": 0, "dropped": 0, "added": 0, "unresolved": 0, "removed": [], "review": []}
     if not decodes or not decodes[0].get("segments"):
         return (decodes[0].get("segments") if decodes else []), report, []
     first = decodes[0]["segments"]
@@ -218,7 +249,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             if not words:
                 empty_votes += 1
                 continue
-            candidates.append({"tokens": [w["tok"] for w in words], "words": words, "base": False,
+            candidates.append({"tokens": [t for w in words for t in w["toks"]], "words": words, "base": False,
                                "seg": _nearest_segment(p["segments"], start, end), "pass": p,
                                # compared on the padded span, but shown as what belongs to this cue: a
                                # review line must not seem to hold a word from the cue next door
@@ -241,6 +272,20 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
         if best >= 2:
             winners = [c for c, v in zip(candidates, votes) if v + 1 == best]
             if any(c["base"] for c in winners):
+                # same words, but the first pass's rendering may be the one that came apart: when a pass it
+                # agrees with says it in ordinary prose, that reading is the better copy of the same cue
+                tidy = [c for c in winners if not c["base"]
+                        and _junk(c.get("text", "")) + JUNK_MARGIN < _junk(seg.get("text", ""))
+                        and _seen_whole(c, territories[index])]
+                if tidy:
+                    pick = min(tidy, key=lambda c: _junk(c.get("text", "")))
+                    replaced = _replace(seg, pick, territories[index])
+                    if replaced is not None:
+                        report["cleaned"] += 1
+                        _note(report, start, end, "the same words, but the first pass's text had come apart",
+                              replaced["text"], candidates)
+                        out.append(replaced)
+                        continue
                 report["confirmed"] += 1          # the first pass is in the majority: keep it word for word
                 # the furthest reading, not the nearest: one pass hearing something else entirely is the
                 # interesting part, even when the others agree and the cue is settled
@@ -253,7 +298,11 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 out.append(seg)
                 continue
             pick = max(winners, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start))
-            replaced = _replace(seg, pick, territories[index]) if _seen_whole(pick, territories[index]) else None
+            fit = _may_replace(pick, candidates[0], territories[index])
+            replaced = _replace(seg, pick, territories[index]) if fit else None
+            if replaced is None and not fit:
+                _note(report, start, end, "the other passes agreed, but on text that had come apart",
+                      seg.get("text", ""), candidates)
             if replaced is not None:
                 report["majority"] += 1
                 _note(report, start, end, "the other passes agreed against the first one",
@@ -270,7 +319,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
         rivals = [c for c in candidates if not c["base"]]
         pick = max(rivals, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start),
                    default=None)
-        if (pick is not None and _seen_whole(pick, territories[index])
+        if (pick is not None and _may_replace(pick, candidates[0], territories[index])
                 and _quality(pick["seg"], speech, len(pick["tokens"]), end - start) > base_score + margin):
             replaced = _replace(seg, pick, territories[index])
             if replaced is not None:
@@ -293,6 +342,19 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
 def _seen_whole(pick: Dict, territory: Region) -> bool:
     """May this candidate's text stand in for the cue? Only if its pass heard the cue's whole territory."""
     return not pick.get("pass") or _fully_seen(pick["pass"]["decode"], *territory)
+
+
+def _may_replace(pick: Dict, base: Dict, territory: Region) -> bool:
+    """
+    Is this reading fit to stand in for the first pass's?
+
+    It has to have heard the whole cue, and it must not be visibly worse text than the one it replaces. A
+    pass that has come apart can still win a vote or a score, and letting it hand over "He's, He's, The,
+    Light, Bringer," in place of a clean sentence is the worst thing this module can do.
+    """
+    if not _seen_whole(pick, territory):
+        return False
+    return _junk(pick.get("text", "")) <= _junk(base.get("text", "")) + JUNK_MARGIN
 
 
 def _note(report: Dict, start: float, end: float, why: str, chosen: str, candidates: List[Dict]) -> None:
@@ -361,7 +423,7 @@ def verify_second_pass(first: List[Dict], second: List[Dict], regions: Optional[
     segments, report, _unresolved = resolve_passes(
         [{"segments": first, "covers": None}, {"segments": second, "covers": None}],
         regions, agree=agree, min_speech=min_speech)
-    report["replaced"] = report["majority"] + report["scored"]
+    report["replaced"] = report["majority"] + report["scored"] + report["cleaned"]
     return segments, report
 
 
@@ -428,6 +490,7 @@ def review_lines(report: Dict, segments: Sequence[Dict], source: str = "",
     lines = [f"whisperer review list{' - ' + source if source else ''}",
              f"{report.get('passes', 1)} passes over {report.get('checked', 0)} cue(s): "
              f"{report.get('confirmed', 0)} agreed, {report.get('majority', 0)} settled by majority, "
+             f"{report.get('cleaned', 0)} taken from a cleaner reading, "
              f"{report.get('scored', 0)} picked on confidence, {report.get('dropped', 0)} dropped, "
              f"{report.get('added', 0)} recovered, {report.get('unresolved', 0)} left unresolved", ""]
     for item in report.get("review", []):

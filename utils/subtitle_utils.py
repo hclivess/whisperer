@@ -257,22 +257,24 @@ def _case_profile(segments: List[Dict]) -> set:
     return seen
 
 
-def _word_stream(segments: List[Dict]) -> Optional[List[Tuple[int, int, Dict]]]:
+def _word_stream(segments: List[Dict]) -> List[Optional[Tuple[int, int, Dict, bool]]]:
     """
-    (segment, index, word) for every word, or None when the words do not spell the text.
+    (segment, index, word, editable) for every word, with None where a segment carries no timings.
 
-    Nothing is edited unless the two agree, for the same reason the full-stop repair checks it: a backend
-    whose word list is not the text cannot be edited through its words without losing something.
+    A segment whose word list does not spell its text cannot be edited through its words without losing
+    something, so it is marked not editable - but its words still carry real timings, so the pauses around
+    it stay measurable. This used to give up on the whole file at the first such segment, and one "[MUSIC]"
+    or one backend oddity in a fifty minute lecture was enough to silence every repair in it.
     """
-    stream = []
+    stream: List[Optional[Tuple[int, int, Dict, bool]]] = []
     for i, seg in enumerate(segments):
         words = seg.get("words") or []
         if not words or not all("start" in w and "end" in w for w in words):
-            return None
-        if _clean("".join(w["word"] for w in words)) != _clean(seg.get("text", "")):
-            return None
+            stream.append(None)                        # nothing measurable here: breaks the chain
+            continue
+        editable = _clean("".join(w["word"] for w in words)) == _clean(seg.get("text", ""))
         for k, w in enumerate(words):
-            stream.append((i, k, w))
+            stream.append((i, k, w, editable))
     return stream
 
 
@@ -317,14 +319,17 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
         if seg.get("words"):
             seg["words"] = [dict(w) for w in seg["words"]]
     stream = _word_stream(out)
-    if not stream:
+    if not any(entry is not None for entry in stream):
         return segments
     common = _case_profile(out)
     changed = set()
 
     for n in range(1, len(stream)):
-        seg_i, k, word = stream[n]
-        prev_seg_i, prev_k, prev = stream[n - 1]
+        here, before = stream[n], stream[n - 1]
+        if here is None or before is None:             # a segment without timings: measure nothing across it
+            continue
+        seg_i, k, word, editable = here
+        prev_seg_i, prev_k, prev, prev_editable = before
         token = word["word"].strip()
         core = token.strip("\"'([{)]}").rstrip(",;:.!?…")
         if not core or not core[:1].isupper() or (len(core) > 1 and core.isupper()):
@@ -339,11 +344,12 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
         pause = float(word["start"]) - float(prev["end"])
         if pause >= sentence_pause:
             prev_core = prev_token.strip("\"'([{)]}").lower()
-            if _TRAILING_PUNCT.search(prev_token) or prev_core in _WEAK_SENTENCE_END or len(prev_core) < 2:
+            if (not prev_editable or _TRAILING_PUNCT.search(prev_token)
+                    or prev_core in _WEAK_SENTENCE_END or len(prev_core) < 2):
                 continue                               # no full stop over a comma or after "to", "the", "and"
             out[prev_seg_i]["words"][prev_k]["word"] = prev["word"].rstrip() + "."
             changed.add(prev_seg_i)
-        elif pause < min_pause:
+        elif pause < min_pause and editable:
             i = token.index(core[0])
             out[seg_i]["words"][k]["word"] = word["word"].replace(token, token[:i] + core[0].lower() + token[i + 1:], 1)
             changed.add(seg_i)
