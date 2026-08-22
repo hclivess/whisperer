@@ -7,7 +7,7 @@ import json
 import os
 import re
 import textwrap
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 def _ts_srt(t: float) -> str:
@@ -119,6 +119,126 @@ def capitalize_sentences(segments: List[Dict]) -> List[Dict]:
         stripped = text.rstrip()
         if stripped:
             new_sentence = bool(_SENTENCE_END.search(stripped))
+    return out
+
+
+# Words that cannot be the last word of a sentence. Used only when there are no word timestamps to look at.
+_CANNOT_END_SENTENCE = {
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "from", "by", "into",
+    "about", "as", "than", "my", "your", "his", "her", "its", "our", "their", "every", "each", "another",
+}
+# Real abbreviations: their full stop is part of the word, never a sentence end.
+_ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "st", "vs", "etc", "e.g", "i.e", "no", "fig", "approx", "inc"}
+_DOT = re.compile(r"\.(?=\s|$)")
+
+
+def _proper_nouns(segments: List[Dict]) -> set:
+    """Words seen capitalised in mid-sentence: they keep their capital when a false sentence break is repaired."""
+    proper = set()
+    for seg in segments:
+        words = seg.get("text", "").split()
+        sentence_start = True
+        for i, w in enumerate(words):
+            core = w.strip("\"'([{)]}").rstrip(",;:.!?…")
+            if not sentence_start and core[:1].isupper() and not core.isupper():
+                proper.add(core.lower())
+            sentence_start = bool(_SENTENCE_END.search(w))
+    return proper
+
+
+def _pauses(segments: List[Dict], i: int) -> Optional[List[Optional[float]]]:
+    """
+    Silence after each full stop of segment i, in text order, or None when it cannot be measured.
+
+    The k-th token ending in "." is the k-th "<dot><space>" of the text, so the two streams line up; if they
+    do not (a backend whose word list does not spell the text), we do not guess.
+    """
+    words = segments[i].get("words") or []
+    if not words or not all("start" in w and "end" in w for w in words):
+        return None
+    out: List[Optional[float]] = []
+    for k, w in enumerate(words):
+        if not w["word"].strip().endswith("."):
+            continue
+        if k + 1 < len(words):
+            out.append(words[k + 1]["start"] - w["end"])
+        else:                                   # last word: the pause runs into the next segment
+            nxt = segments[i + 1] if i + 1 < len(segments) else None
+            nxt_words = (nxt.get("words") if nxt else None) or []
+            start = nxt_words[0]["start"] if nxt_words else (nxt["start"] if nxt else None)
+            out.append(None if start is None else start - w["end"])
+    return out if len(out) == len(_DOT.findall(segments[i].get("text", ""))) else None
+
+
+def _spurious(text: str, pos: int, pause: Optional[float], min_pause: float) -> bool:
+    """Is the full stop at `pos` one the speaker never made?"""
+    if pos and text[pos - 1] == ".":                       # "..." trails off on purpose
+        return False
+    before = text[:pos].split()
+    word = before[-1].lower().strip("\"'([{)]}") if before else ""
+    if len(word) == 1 or word in _ABBREVIATIONS or "." in word[:-1]:   # "J. R. R." / "Dr." / "U.S."
+        return False
+    if word[-1:].isdigit():                                # "3." of a decimal or a list number
+        return False
+    if pause is None:
+        return word in _CANNOT_END_SENTENCE
+    return pause < min_pause
+
+
+def _lower_first(text: str, proper: set) -> str:
+    """Lower-case the word that used to start a sentence, unless it is "I" or a name."""
+    m = _FIRST_LETTER.match(text)
+    if not m or not m.group(2).isupper():
+        return text
+    word = text[m.start(2):].split()[0].strip("\"'([{)]}").rstrip(",;:.!?")
+    if word == "I" or word.startswith("I'") or word.isupper() or word.lower() in proper:
+        return text
+    return text[:m.start(2)] + m.group(2).lower() + text[m.end(2):]
+
+
+def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> List[Dict]:
+    """
+    Remove full stops the speaker never made.
+
+    Whisper punctuates by language model, not by ear, and regularly ends a sentence in the middle of a phrase -
+    "When someone is. First about to embark on a minor task" - which then reads as two broken sentences and gets
+    a capital letter from capitalize_sentences on top. People pause between sentences, so a full stop with less
+    than `min_pause` of silence around it is the model's invention: it is dropped and the next word goes back to
+    lower case (names and "I" keep their capital). Without word timestamps only full stops after a word that
+    cannot end a sentence ("of.", "the.", "and.") are removed.
+    """
+    if not segments or min_pause <= 0:
+        return segments
+    out = [dict(s) for s in segments]
+    proper = _proper_nouns(out)
+    for i, seg in enumerate(out):
+        text = seg.get("text", "")
+        pauses = _pauses(out, i)
+        positions = [m.start() for m in _DOT.finditer(text)]
+        # the k-th full stop of the text is the k-th word token ending in "." - keep both in step
+        dot_tokens = [k for k, w in enumerate(seg.get("words") or []) if w["word"].strip().endswith(".")]
+        aligned = len(dot_tokens) == len(positions)
+        words = None
+        for k in range(len(positions) - 1, -1, -1):        # backwards: earlier positions stay valid
+            pos = positions[k]
+            if not _spurious(text, pos, pauses[k] if pauses else None, min_pause):
+                continue
+            head, tail = text[:pos], text[pos + 1:]
+            if tail.strip():                               # the sentence continues inside this cue
+                text = head + tail[:len(tail) - len(tail.lstrip())] + _lower_first(tail.lstrip(), proper)
+            elif i + 1 < len(out) and pauses:               # ... or in the next one, but only on measured silence
+                out[i + 1] = {**out[i + 1], "text": _lower_first(out[i + 1].get("text", ""), proper)}
+                text = head
+            else:
+                continue
+            if aligned:
+                words = words if words is not None else [dict(w) for w in seg["words"]]
+                t = words[dot_tokens[k]]["word"]
+                words[dot_tokens[k]]["word"] = t.rstrip()[:-1] + t[len(t.rstrip()):]
+        if text != seg.get("text", ""):
+            seg["text"] = text
+            if words is not None:
+                seg["words"] = words
     return out
 
 

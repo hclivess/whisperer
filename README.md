@@ -98,6 +98,7 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 | Problem | What whisperer does |
 |---|---|
 | Cue appears before the line is spoken / stays on after it | **Snap cues to detected speech** (Sync tab, on by default): every cue start/end is moved onto the nearest speech onset/offset within *Max shift* (600 ms), cues that run over silence are cut, then *Hold after speech* (200 ms), *Min cue duration* and *Min gap* are applied. Word timestamps are used automatically. |
+| A sentence is cut in half and a new one starts mid-phrase | **Remove full stops the speaker never made** (Subtitles tab, on by default): Whisper punctuates by language model, not by ear, and regularly ends a sentence inside a phrase — *"When someone is. First about to embark on a minor task"*. People pause between sentences, so a full stop with less than *Shortest pause between sentences* (250 ms) of silence around it is the model's invention: it is removed and the next word goes back to lower case. Names (seen capitalised mid-sentence elsewhere) and *I* keep their capital; abbreviations, initials, decimals and `...` are never touched. Without word timestamps only impossible endings (`of.`, `the.`, `and.`) are repaired. |
 | A cue flashes on screen for a fraction of a second | **Merge cues that stay too short into their neighbour** (Sync tab, on by default): Whisper emits segments as short as 10 ms, and a cue squeezed against the next one cannot reach *Min cue duration* on its own. Such a cue is first stretched into the free time after it and, if there is none, glued to the cue beside it — two short lines shown together read fine, a line held over the next one's speech does not. Merging is skipped when the joined text would not fit the cue layout, would run past *Max cue duration*, or the two cues are over 1.5 s apart. |
 | Everything early by a constant amount | Audio streams with a non-zero start time are now extracted in place (`aresample=first_pts=0`), and timestamp gaps are filled with silence so nothing drifts over dropped packets. If you still want a nudge: **Global offset**. |
 | Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
@@ -119,7 +120,7 @@ project simply has no reputation with Microsoft.
 - **To run it:** *More info* → *Run anyway*. If the whole folder came out of a downloaded `.zip`, Windows also
   tags it with the mark-of-the-web; `Unblock-File .\whisperer\*` in PowerShell clears that.
 - **To check you got what we built:** every release ships a `.sha256` next to the archive.
-  `Get-FileHash whisperer-1.3.5-windows-x64.zip` must print the same digest.
+  `Get-FileHash whisperer-1.3.6-windows-x64.zip` must print the same digest.
 - **If Defender quarantines it outright** (rather than just warning), that is a false positive on the
   PyInstaller runtime — please report it at <https://www.microsoft.com/wdsi/filesubmission> and open an issue.
 
@@ -134,6 +135,13 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.3.6
+
+- **No more invented sentence breaks**: full stops Whisper places in the middle of a phrase are removed when the
+  speaker did not actually pause there, and the following word goes back to lower case (Subtitles tab, on by
+  default, threshold configurable). Names and *I* keep their capital; abbreviations, initials, decimals and
+  ellipses are left alone. This is measured from the word timestamps, so it works in any language.
 
 ## Changes in 1.3.5
 
