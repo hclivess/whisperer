@@ -594,20 +594,28 @@ class UIManager(QWidget):
         self.controls["min_cue_ms"].setValue(800)
         grid.addWidget(QLabel("Min cue duration:"), 3, 0)
         grid.addWidget(self.controls["min_cue_ms"], 3, 1)
+        self.controls["merge_short_cues"] = QCheckBox("Merge cues that stay too short into their neighbour")
+        self.controls["merge_short_cues"].setChecked(True)
+        self.controls["merge_short_cues"].setToolTip(
+            "A cue that cannot reach the minimum duration in the free time around it is glued to the cue next to "
+            "it instead of being extended over the next line's speech - Whisper emits segments as short as 10 ms, "
+            "which flash on screen unreadably. Merging is skipped when the joined text would not fit the cue "
+            "layout, would run past the maximum cue duration, or the two cues are far apart.")
+        grid.addWidget(self.controls["merge_short_cues"], 4, 0, 1, 2)
         self.controls["min_gap_ms"] = QSpinBox()
         self.controls["min_gap_ms"].setRange(0, 1000)
         self.controls["min_gap_ms"].setSingleStep(10)
         self.controls["min_gap_ms"].setSuffix(" ms")
         self.controls["min_gap_ms"].setValue(80)
-        grid.addWidget(QLabel("Min gap between cues:"), 4, 0)
-        grid.addWidget(self.controls["min_gap_ms"], 4, 1)
+        grid.addWidget(QLabel("Min gap between cues:"), 5, 0)
+        grid.addWidget(self.controls["min_gap_ms"], 5, 1)
         self.controls["global_offset_ms"] = QSpinBox()
         self.controls["global_offset_ms"].setRange(-600000, 600000)
         self.controls["global_offset_ms"].setSingleStep(50)
         self.controls["global_offset_ms"].setSuffix(" ms")
         self.controls["global_offset_ms"].setToolTip("Added to every cue at the very end. Negative = earlier.")
-        grid.addWidget(QLabel("Global offset:"), 5, 0)
-        grid.addWidget(self.controls["global_offset_ms"], 5, 1)
+        grid.addWidget(QLabel("Global offset:"), 6, 0)
+        grid.addWidget(self.controls["global_offset_ms"], 6, 1)
         snap_group.setLayout(grid)
         layout.addWidget(snap_group)
         hint2 = QLabel("Symptoms → fix: cues appear before people speak or linger over silence → snapping (on by "
@@ -1106,6 +1114,7 @@ class UIManager(QWidget):
             "snap_max_shift_ms": c["snap_max_shift_ms"].value(),
             "end_padding_ms": c["end_padding_ms"].value(),
             "min_cue_ms": c["min_cue_ms"].value(),
+            "merge_short_cues": c["merge_short_cues"].isChecked(),
             "min_gap_ms": c["min_gap_ms"].value(),
             "global_offset_ms": c["global_offset_ms"].value(),
             "resync_file": c["resync_file"].text().strip(),

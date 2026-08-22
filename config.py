@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -79,6 +79,7 @@ DEFAULT_SETTINGS = {
     "snap_max_shift_ms": 600,
     "end_padding_ms": 200,
     "min_cue_ms": 800,
+    "merge_short_cues": True,
     "min_gap_ms": 80,
     "global_offset_ms": 0,
     "resync_file": "",              # empty = <video>.srt / .vtt next to the source

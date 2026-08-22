@@ -122,6 +122,105 @@ def capitalize_sentences(segments: List[Dict]) -> List[Dict]:
     return out
 
 
+def _merged(a: Dict, b: Dict, capitalize: bool = True) -> Dict:
+    head, tail = a.get("text", ""), b.get("text", "")
+    if capitalize and _SENTENCE_END.search(head.rstrip()):
+        m = _FIRST_LETTER.match(tail)                 # "Yeah." + "so what" -> "Yeah. So what"
+        if m and m.group(2).islower():
+            tail = tail[:m.start(2)] + m.group(2).upper() + tail[m.end(2):]
+    out = {**a, "start": min(a["start"], b["start"]), "end": max(a["end"], b["end"]),
+           "text": _clean(f"{head} {tail}")}
+    words = (a.get("words") or []) + (b.get("words") or [])
+    if words:
+        out["words"] = words
+    return out
+
+
+def _grow(cues: List[Dict], i: int, min_duration: float, min_gap: float, max_duration: float,
+          earlier: bool = False) -> None:
+    """
+    Stretch cue i towards min_duration using only the free time around it (never over a neighbour).
+
+    The end is extended first; `earlier` also allows the start to be pulled back into the silence before the
+    cue, which puts the text on screen ahead of its speech - only worth doing once merging has been ruled out.
+    """
+    cue = cues[i]
+    if cue["end"] - cue["start"] >= min_duration:
+        return
+    ceiling = cues[i + 1]["start"] - min_gap if i + 1 < len(cues) else float("inf")
+    if max_duration > 0:
+        ceiling = min(ceiling, cue["start"] + max_duration)
+    cue["end"] = max(cue["end"], min(cue["start"] + min_duration, ceiling))
+    if not earlier or cue["end"] - cue["start"] >= min_duration:
+        return
+    floor = cues[i - 1]["end"] + min_gap if i > 0 else 0.0
+    cue["start"] = min(cue["start"], max(cue["end"] - min_duration, floor))
+
+
+def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: float = 0.08,
+                     max_duration: float = 7.0, limit_chars: int = 84,
+                     max_merge_gap: float = 1.5, capitalize: bool = True) -> List[Dict]:
+    """
+    Give every cue enough time on screen to be read.
+
+    Whisper emits segments as short as 10 ms, and snapping can squeeze a cue against its neighbour; both flash
+    a line of text for a frame or two. Simply extending the end would push the cue over the next one's speech,
+    so the cue is first stretched into whatever free time surrounds it and, when there is none, glued to the
+    neighbouring cue - two short lines shown together read fine, a delayed line does not.
+
+    A merge is refused when the joined text would not fit the cue layout (limit_chars), when the result would
+    run longer than max_duration, or when the two cues are more than max_merge_gap apart (they belong to
+    different moments). Cues that cannot be fixed either way are left as they are.
+    """
+    if min_duration <= 0 or not segments:
+        return segments
+    cues = [dict(s) for s in segments]
+
+    def short(c: Dict) -> bool:
+        return c["end"] - c["start"] < min_duration - 1e-6
+
+    def joinable(a: Dict, b: Dict) -> bool:
+        if max(0.0, b["start"] - a["end"]) > max_merge_gap:
+            return False
+        if max_duration > 0 and b["end"] - a["start"] > max_duration:
+            return False
+        return limit_chars <= 0 or len(a.get("text", "")) + 1 + len(b.get("text", "")) <= limit_chars
+
+    for i in range(len(cues)):
+        _grow(cues, i, min_duration, min_gap, max_duration)
+
+    i = 0
+    while i < len(cues):
+        if not short(cues[i]):
+            i += 1
+            continue
+        merged_at = i
+        fwd = i + 1 < len(cues) and joinable(cues[i], cues[i + 1])
+        bwd = i > 0 and joinable(cues[i - 1], cues[i])
+        if fwd and bwd:
+            # keep sentences whole: never glue a cue onto a finished sentence when it can go the other way
+            if _SENTENCE_END.search(cues[i - 1].get("text", "").rstrip()):
+                bwd = False
+            elif _SENTENCE_END.search(cues[i].get("text", "").rstrip()):
+                fwd = False
+            elif cues[i]["start"] - cues[i - 1]["end"] < cues[i + 1]["start"] - cues[i]["end"]:
+                fwd = False
+        if fwd:
+            cues[i:i + 2] = [_merged(cues[i], cues[i + 1], capitalize)]
+        elif bwd:
+            cues[i - 1:i + 1] = [_merged(cues[i - 1], cues[i], capitalize)]
+            i -= 1
+            merged_at = i
+        else:
+            # nothing to glue it to: show it a little early rather than leaving a flash on screen
+            _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
+            i += 1
+            continue
+        _grow(cues, merged_at, min_duration, min_gap, max_duration)   # the merged cue may still be short
+
+    return cues
+
+
 import unicodedata  # noqa: E402
 
 

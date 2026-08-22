@@ -13,7 +13,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
-from utils.subtitle_utils import capitalize_sentences, split_segments, strip_foreign_script, write_subtitles
+from utils.subtitle_utils import (capitalize_sentences, merge_short_cues, split_segments,
+                                  strip_foreign_script, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 
@@ -231,6 +232,16 @@ class _Worker(QThread):
                     min_duration=int(s.get("min_cue_ms", 800)) / 1000.0, min_gap=int(s.get("min_gap_ms", 80)) / 1000.0,
                     max_duration=float(s["max_segment_seconds"]) if s.get("sync_mode") != "resync" else 0.0)
                 meta["speech_regions"] = len(regions)
+            if s.get("merge_short_cues", True) and s.get("sync_mode") != "resync":
+                before = len(segments)
+                segments = merge_short_cues(
+                    segments, min_duration=int(s.get("min_cue_ms", 800)) / 1000.0,
+                    min_gap=int(s.get("min_gap_ms", 80)) / 1000.0,
+                    max_duration=float(s["max_segment_seconds"]),
+                    limit_chars=int(s["max_line_chars"]) * int(s["max_lines"]),
+                    capitalize=bool(s.get("capitalize_sentences", True)))
+                if len(segments) != before:
+                    self.status.emit(f"Merged {before - len(segments)} cue(s) that were too short to read")
             if s.get("strip_foreign_script", True) and s.get("sync_mode") != "resync":
                 before = len(segments)
                 segments = strip_foreign_script(segments)

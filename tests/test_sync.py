@@ -108,3 +108,67 @@ def test_strip_foreign_script():
     # Czech diacritics are Latin, never touched
     cz = [{"text": "Příliš žluťoučký kůň úpěl ďábelské ódy"}]
     assert strip_foreign_script(cz) == cz
+
+
+def test_merge_short_cues_glues_flashing_cues():
+    from utils.subtitle_utils import merge_short_cues
+    # a 10 ms Whisper segment right before the next line: no free time, so it is glued to its neighbour
+    cues = [{"start": 0.50, "end": 0.51, "text": "Yeah"},
+            {"start": 0.60, "end": 3.00, "text": "so what I was saying"}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
+    assert len(out) == 1
+    assert out[0]["text"] == "Yeah so what I was saying"
+    assert out[0]["start"] == 0.50 and out[0]["end"] == 3.00
+
+
+def test_merge_short_cues_prefers_free_time_over_merging():
+    from utils.subtitle_utils import merge_short_cues
+    cues = [{"start": 1.0, "end": 1.1, "text": "Hi"}, {"start": 5.0, "end": 7.0, "text": "there"}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
+    assert len(out) == 2                                   # a 3.9 s gap follows: just stretch into it
+    assert abs(out[0]["end"] - 1.8) < 1e-6
+
+
+def test_merge_short_cues_refuses_when_text_would_not_fit():
+    from utils.subtitle_utils import merge_short_cues
+    long = "x" * 84
+    cues = [{"start": 0.0, "end": 0.05, "text": "No"}, {"start": 0.05, "end": 4.0, "text": long}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
+    assert len(out) == 2 and out[0]["text"] == "No"        # left alone rather than delaying the next line
+
+
+def test_merge_short_cues_keeps_sentences_whole():
+    from utils.subtitle_utils import merge_short_cues
+    cues = [{"start": 0.0, "end": 1.0, "text": "That was the end."},
+            {"start": 1.05, "end": 1.10, "text": "And"},
+            {"start": 1.15, "end": 3.0, "text": "then we left"}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.05, max_duration=7.0, limit_chars=84)
+    assert [c["text"] for c in out] == ["That was the end.", "And then we left"]
+
+
+def test_merge_short_cues_carries_words_and_chains():
+    from utils.subtitle_utils import merge_short_cues
+    cues = [{"start": 0.0, "end": 0.05, "text": "A", "words": [{"start": 0.0, "end": 0.05, "word": "A"}]},
+            {"start": 0.06, "end": 0.10, "text": "B", "words": [{"start": 0.06, "end": 0.10, "word": "B"}]},
+            {"start": 0.11, "end": 0.90, "text": "C", "words": [{"start": 0.11, "end": 0.90, "word": "C"}]}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.02, max_duration=7.0, limit_chars=84)
+    assert len(out) == 1 and out[0]["text"] == "A B C"
+    assert [w["word"] for w in out[0]["words"]] == ["A", "B", "C"]
+
+
+def test_no_cue_shorter_than_the_minimum_after_snapping():
+    from utils.subtitle_utils import merge_short_cues
+    regions = [(1.00, 1.06), (1.10, 4.00)]
+    cues = [{"start": 1.00, "end": 1.06, "text": "Hi"}, {"start": 1.10, "end": 4.00, "text": "there everyone"}]
+    snapped = snap_to_speech(cues, regions, max_shift=0.6, end_padding=0.2, min_duration=0.8, min_gap=0.08)
+    assert any(c["end"] - c["start"] < 0.8 for c in snapped)          # snapping alone cannot fix this
+    out = merge_short_cues(snapped, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
+    assert all(c["end"] - c["start"] >= 0.8 for c in out)
+    assert [c["text"] for c in out] == ["Hi there everyone"]
+
+
+def test_merge_short_cues_capitalises_across_a_full_stop():
+    from utils.subtitle_utils import merge_short_cues
+    cues = [{"start": 0.50, "end": 0.51, "text": "Yeah."}, {"start": 0.60, "end": 3.0, "text": "so I said"}]
+    assert merge_short_cues(cues, 0.8, 0.08, 7.0, 84)[0]["text"] == "Yeah. So I said"
+    assert merge_short_cues(cues, 0.8, 0.08, 7.0, 84, capitalize=False)[0]["text"] == "Yeah. so I said"
