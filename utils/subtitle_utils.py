@@ -7,7 +7,7 @@ import json
 import os
 import re
 import textwrap
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 def _ts_srt(t: float) -> str:
@@ -240,6 +240,117 @@ def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> Lis
                 seg["words"] = words
     return out
 
+
+def _case_profile(segments: List[Dict]) -> set:
+    """
+    Words this transcript ever writes in lower case - so the ones it never does are the possible names.
+
+    One lower-case sighting anywhere proves a word is an ordinary one, whatever a capital elsewhere might
+    suggest. Everything else is left alone: not touching a name is worth missing a few repairs.
+    """
+    seen = set()
+    for seg in segments:
+        for w in seg.get("text", "").split():
+            core = w.strip("\"'([{)]}").rstrip(",;:.!?…")
+            if core and core[:1].islower():
+                seen.add(core.lower())
+    return seen
+
+
+def _word_stream(segments: List[Dict]) -> Optional[List[Tuple[int, int, Dict]]]:
+    """
+    (segment, index, word) for every word, or None when the words do not spell the text.
+
+    Nothing is edited unless the two agree, for the same reason the full-stop repair checks it: a backend
+    whose word list is not the text cannot be edited through its words without losing something.
+    """
+    stream = []
+    for i, seg in enumerate(segments):
+        words = seg.get("words") or []
+        if not words or not all("start" in w and "end" in w for w in words):
+            return None
+        if _clean("".join(w["word"] for w in words)) != _clean(seg.get("text", "")):
+            return None
+        for k, w in enumerate(words):
+            stream.append((i, k, w))
+    return stream
+
+
+_TRAILING_PUNCT = re.compile(r"""[,;:.!?…—–-]["'”’»)\]]*$""")
+# Words a sentence is not plausibly finished on, so no full stop is invented after them. Whisper cuts its
+# windows at silences, which is why a capital so often follows a real pause without the sentence having
+# ended - "a rebuke to [pause] A stale order" must not become "a rebuke to. A stale order". This is the
+# mirror of the 1.3.7 rule and points the same way: when in doubt, leave the text alone.
+_WEAK_SENTENCE_END = {
+    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "from", "by", "as",
+    "that", "which", "who", "whose", "is", "was", "are", "were", "be", "been", "am", "if", "when", "while",
+    "because", "so", "than", "then", "my", "your", "his", "her", "their", "our", "its", "this", "these",
+    "those", "into", "onto", "about", "over", "under", "very", "just", "not", "no", "some", "any",
+}
+
+
+def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
+                           sentence_pause: float = 0.0) -> List[Dict]:
+    """
+    Settle every capital that has no full stop in front of it.
+
+    Whisper decodes in 30 second windows and starts each one as if it were a fresh utterance, so it writes
+    capitals in the middle of a phrase - "a rebuke to A stale order" - and, the other way round, ends a
+    window without the full stop the sentence needed. The word timestamps say which of the two happened:
+    people pause between sentences and do not pause inside them.
+
+      pause >= sentence_pause : the speaker did stop, Whisper only forgot the full stop -> add it
+      pause <  min_pause      : nobody stopped, the capital is the window boundary -> lower-case it
+      anything in between     : left exactly as it is
+
+    Adding is held to a higher standard than lowering, because Whisper cuts its windows at silences: a
+    capital after a real pause is ambiguous, so no full stop is invented after a word a sentence does not
+    plausibly end on (_WEAK_SENTENCE_END) or over punctuation that is already there. A word this transcript
+    never writes in lower case may be a name and keeps its capital either way. Without word timestamps
+    nothing is measured and nothing is changed.
+    """
+    if not segments or min_pause <= 0:
+        return segments
+    sentence_pause = sentence_pause or max(0.5, min_pause * 2)
+    out = [dict(s) for s in segments]
+    for seg in out:
+        if seg.get("words"):
+            seg["words"] = [dict(w) for w in seg["words"]]
+    stream = _word_stream(out)
+    if not stream:
+        return segments
+    common = _case_profile(out)
+    changed = set()
+
+    for n in range(1, len(stream)):
+        seg_i, k, word = stream[n]
+        prev_seg_i, prev_k, prev = stream[n - 1]
+        token = word["word"].strip()
+        core = token.strip("\"'([{)]}").rstrip(",;:.!?…")
+        if not core or not core[:1].isupper() or (len(core) > 1 and core.isupper()):
+            continue                                   # lower case already, or an acronym
+        if len(core) == 1 and token.rstrip("\"'”’»)]").endswith("."):
+            continue                                   # "J. R. R.": an initial, not a word
+        if core == "I" or core.startswith("I'") or core.lower() not in common:
+            continue                                   # "I", or a word never seen in lower case: a name
+        prev_token = prev["word"].strip()
+        if _SENTENCE_END.search(prev_token):
+            continue                                   # the sentence is already closed: nothing to settle
+        pause = float(word["start"]) - float(prev["end"])
+        if pause >= sentence_pause:
+            prev_core = prev_token.strip("\"'([{)]}").lower()
+            if _TRAILING_PUNCT.search(prev_token) or prev_core in _WEAK_SENTENCE_END or len(prev_core) < 2:
+                continue                               # no full stop over a comma or after "to", "the", "and"
+            out[prev_seg_i]["words"][prev_k]["word"] = prev["word"].rstrip() + "."
+            changed.add(prev_seg_i)
+        elif pause < min_pause:
+            i = token.index(core[0])
+            out[seg_i]["words"][k]["word"] = word["word"].replace(token, token[:i] + core[0].lower() + token[i + 1:], 1)
+            changed.add(seg_i)
+
+    for i in changed:
+        out[i]["text"] = _clean("".join(w["word"] for w in out[i]["words"]))
+    return out
 
 def _merged(a: Dict, b: Dict, capitalize: bool = True) -> Dict:
     head, tail = a.get("text", ""), b.get("text", "")

@@ -24,8 +24,14 @@ Region = Tuple[float, float]
 # Two decodes of the same span that reproduce each other this well said the same sentence, punctuation and
 # hesitations aside. Below it they genuinely disagree about the words.
 AGREE = 0.6
-# How much of a span the VAD must find speech in before text over it is believable.
+# How much of a span the VAD must find speech in before text over it is believable (used for scoring).
 MIN_SPEECH = 0.35
+# What the VAD has to find before it may vote a cue away: near enough to nothing, by both measures. A long
+# cue with a short utterance in it has a low speech *fraction* and real words - that must never be a vote.
+SILENT_FRACTION = 0.15
+SILENT_SECONDS = 0.3
+# How far a cue's claim on the other decodes' words may reach past its own span, when it is being replaced.
+TERRITORY = 2.0
 # Quality margin a rival decode must beat the first pass by before it may replace it on score alone.
 MARGIN = 0.25
 
@@ -59,8 +65,34 @@ def _in_span(words: List[Dict], start: float, end: float, pad: float = 0.4) -> L
 
 
 def _inside(words: List[Dict], start: float, end: float) -> List[Dict]:
-    """Words whose middle falls in the span. What replacement text is built from: no word twice in the file."""
+    """Words whose middle falls in the span."""
     return [w for w in words if start <= (w["start"] + w["end"]) / 2 <= end]
+
+
+def _territories(cues: List[Dict], reach: float = TERRITORY) -> List[Region]:
+    """
+    The stretch of audio each cue owns: out to the middle of the gap to its neighbour, at most `reach` past
+    its own span.
+
+    Replacement text is taken from a cue's territory rather than its exact span. The passes cut segments in
+    slightly different places, so a word sitting just outside the cue's own start or end still belongs to
+    somebody - taking only the exact span dropped those words from the file, and taking a padded span put
+    them in twice. Territories touch and never overlap, so every word of another decode lands in exactly
+    one cue.
+    """
+    out: List[Region] = []
+    for i, cue in enumerate(cues):
+        start, end = float(cue["start"]), float(cue["end"])
+        if i > 0:
+            start = max(start - reach, (float(cues[i - 1]["end"]) + start) / 2)
+        else:
+            start = start - reach
+        if i + 1 < len(cues):
+            end = min(end + reach, (end + float(cues[i + 1]["start"])) / 2)
+        else:
+            end = end + reach
+        out.append((start, end))
+    return out
 
 
 def speech_fraction(regions: Optional[Sequence[Region]], start: float, end: float) -> Optional[float]:
@@ -148,10 +180,11 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
 
     prepared = [{"decode": d, "words": _words(d.get("segments") or []),
                  "segments": d.get("segments") or []} for d in others]
+    territories = _territories(first)
     out: List[Dict] = []
     unresolved: List[Region] = []
 
-    for seg in first:
+    for index, seg in enumerate(first):
         start, end = float(seg["start"]), float(seg["end"])
         speech = speech_fraction(regions, start, end)
         voters = [p for p in prepared if _covers(p["decode"], start, end)]
@@ -170,7 +203,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 continue
             candidates.append({"tokens": [w["tok"] for w in words], "words": words, "base": False,
                                "seg": _nearest_segment(p["segments"], start, end), "pass": p})
-        if speech is not None and speech < min_speech:
+        if speech is not None and speech < SILENT_FRACTION and speech * (end - start) < SILENT_SECONDS:
             empty_votes += 1                      # the VAD gets a vote, and it can only vote for silence
 
         votes = _support(candidates, agree)
@@ -191,7 +224,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 out.append(seg)
                 continue
             pick = max(winners, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start))
-            replaced = _replace(seg, pick, start, end)
+            replaced = _replace(seg, pick, territories[index])
             if replaced is not None:
                 report["majority"] += 1
                 out.append(replaced)
@@ -208,7 +241,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                    default=None)
         if pick is not None and _quality(pick["seg"], speech, len(pick["tokens"]),
                                          end - start) > base_score + margin:
-            replaced = _replace(seg, pick, start, end)
+            replaced = _replace(seg, pick, territories[index])
             if replaced is not None:
                 report["scored"] += 1
                 out.append(replaced)
@@ -222,9 +255,9 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
     return out, report, unresolved
 
 
-def _replace(seg: Dict, pick: Dict, start: float, end: float) -> Optional[Dict]:
+def _replace(seg: Dict, pick: Dict, territory: Region) -> Optional[Dict]:
     """The first pass's cue with another decode's words in it. Timing, and everything else, stays."""
-    own = _inside(pick["pass"]["words"], start, end) if pick.get("pass") else (pick.get("words") or [])
+    own = _inside(pick["pass"]["words"], *territory) if pick.get("pass") else (pick.get("words") or [])
     text = _text_of(own)
     if not text:
         return None

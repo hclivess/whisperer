@@ -14,8 +14,8 @@ from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
 from utils.subtitle_utils import (capitalize_sentences, enforce_min_duration, merge_short_cues,
-                                  repair_sentence_breaks, split_segments, strip_foreign_script,
-                                  write_subtitles)
+                                  repair_sentence_breaks, repair_sentence_starts, split_segments,
+                                  strip_foreign_script, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 from utils.verify_utils import merge_windows, resolve_passes, vocabulary_prompt
@@ -278,6 +278,10 @@ class _Worker(QThread):
                 if s.get("repair_sentence_breaks", True):
                     # before splitting and snapping: the cue text is still Whisper's own, word for word
                     segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
+                if s.get("repair_sentence_starts", True):
+                    # the other half of the same idea: a capital with no full stop in front of it is either
+                    # a sentence Whisper forgot to close or one it started at a window boundary
+                    segments = repair_sentence_starts(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
                 segments = split_segments(segments, int(s["max_line_chars"]), int(s["max_lines"]),
                                           float(s["max_segment_seconds"]))
 
