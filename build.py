@@ -209,6 +209,12 @@ def package(out_dir: str) -> str:
 
 def main():
     os.chdir(ROOT)
+    if "--checksum" in sys.argv:
+        # CI re-runs this on an archive that came back signed from a signing service: the bytes changed,
+        # so the .sha256 written at packaging time no longer matches what people download.
+        for archive in sys.argv[sys.argv.index("--checksum") + 1:]:
+            print(f"Checksum: {checksum(archive)}")
+        return
     shutil.rmtree(BUILD_DIR, ignore_errors=True)
     cmd = pyinstaller_command()
     print("Running:", " ".join(cmd), flush=True)

@@ -124,8 +124,9 @@ project simply has no reputation with Microsoft.
   PyInstaller runtime — please report it at <https://www.microsoft.com/wdsi/filesubmission> and open an issue.
 
 The executable carries full publisher/product metadata and is built with `--onedir` (no self-extracting stub)
-and without UPX, which is what antivirus heuristics react to. The build is signature-ready: setting the
-`WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` repository secrets makes CI sign and timestamp the `.exe`.
+and without UPX, which is what antivirus heuristics react to. Code signing through
+[SignPath Foundation](https://signpath.org/opensource) (free for open-source projects) is wired into the release
+workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 
 ## Building binaries
 
