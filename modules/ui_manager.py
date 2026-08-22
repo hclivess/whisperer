@@ -603,9 +603,10 @@ class UIManager(QWidget):
         self.controls["merge_short_cues"].setToolTip(
             "A cue that cannot reach the minimum duration in the free time around it is glued to the cue next to "
             "it instead of being extended over the next line's speech - Whisper emits segments as short as 10 ms, "
-            "which flash on screen unreadably. Merging is skipped when the joined text would not fit the cue "
-            "layout, would run past the maximum cue duration, or the two cues are far apart - a cue that can "
-            "be neither stretched nor merged borrows the missing time from a neighbour that has it to spare.")
+            "which flash on screen unreadably. Applies to resynced subtitles too. If the joined text is over the cue "
+            "layout, the cues are merged anyway and the text takes an extra line - the merged cue spans exactly "
+            "the two it replaces, so nothing moves out of sync. Merging is refused only past the maximum cue "
+            "duration or when the two cues are far apart; that cue then borrows time from a neighbour instead.")
         grid.addWidget(self.controls["merge_short_cues"], 4, 0, 1, 2)
         self.controls["min_gap_ms"] = QSpinBox()
         self.controls["min_gap_ms"].setRange(0, 1000)

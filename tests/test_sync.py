@@ -129,28 +129,38 @@ def test_merge_short_cues_prefers_free_time_over_merging():
     assert abs(out[0]["end"] - 1.8) < 1e-6
 
 
-def test_merge_short_cues_refuses_when_text_would_not_fit():
+def test_merge_short_cues_takes_an_extra_line_over_a_flash():
     from utils.subtitle_utils import merge_short_cues
     long = "x" * 84
     cues = [{"start": 0.0, "end": 0.05, "text": "No"}, {"start": 0.05, "end": 4.0, "text": long}]
     out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
-    assert len(out) == 2 and out[0]["text"] == "No"        # the joined text would not fit: no merge
-    assert abs(out[0]["end"] - out[0]["start"] - 0.8) < 1e-6   # but it still gets its reading time,
-    assert abs(out[1]["end"] - out[1]["start"] - 3.12) < 1e-6  # borrowed from a neighbour that has it
+    # the joined text is over the layout, which is a preference - the flash is not acceptable, so they merge
+    assert len(out) == 1 and out[0]["text"] == f"No {long}"
+    assert out[0]["start"] == 0.0 and out[0]["end"] == 4.0     # spans both: no boundary moved
 
 
-def test_merge_short_cues_borrows_from_a_neighbour_when_nothing_fits():
+def test_merge_short_cues_merges_a_full_line_squeezed_between_full_lines():
     from utils.subtitle_utils import merge_short_cues
-    # a full line squeezed to 80 ms between two full lines: no free time, and no merge can fit the layout
+    # the 80 ms cue in the middle: no free time, and no merge fits 42x2 - it is merged anyway, and the
+    # merged cue spans exactly the two it replaces, so nothing in the file moves out of sync
     cues = [{"start": 2012.258, "end": 2016.380, "text": "why so often when you're arguing with " + "x" * 40},
             {"start": 2016.460, "end": 2016.540, "text": "come up and you're like oh my god " + "x" * 48},
             {"start": 2016.620, "end": 2022.860, "text": "you know and then things explode " + "x" * 44}]
     out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
-    assert len(out) == 3
+    assert len(out) == 2
     assert all(c["end"] - c["start"] >= 0.8 - 1e-6 for c in out)
-    assert all(out[i + 1]["start"] - out[i]["end"] >= 0.08 - 1e-6 for i in range(2))
-    assert out[0]["start"] == 2012.258 and out[2]["end"] == 2022.860   # the run keeps its outer timing
-    assert abs(out[1]["end"] - 2016.540) < 1e-6      # the flashing cue kept its end, it starts earlier
+    assert [c["start"] for c in out] == [2012.258, 2016.460]   # every start is where it always was
+    assert [c["end"] for c in out] == [2016.380, 2022.860]
+    assert out[1]["text"].startswith("come up") and out[1]["text"].endswith("x" * 44)
+
+
+def test_wrap_lines_never_makes_a_line_wider_than_the_limit():
+    from utils.subtitle_utils import wrap_lines
+    text = " ".join(["word"] * 40)                            # 199 chars, way over 42 x 2
+    lines = wrap_lines(text, 42, 2).split("\n")
+    assert len(lines) == 5                                    # an extra line instead of 100-char lines
+    assert all(len(line) <= 42 for line in lines)
+    assert " ".join(lines) == text                            # not a character lost
 
 
 def test_merge_short_cues_keeps_sentences_whole():

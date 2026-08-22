@@ -312,13 +312,14 @@ def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: f
     Whisper emits segments as short as 10 ms, and snapping can squeeze a cue against its neighbour; both flash
     a line of text for a frame or two. Simply extending the end would push the cue over the next one's speech,
     so the cue is first stretched into whatever free time surrounds it and, when there is none, glued to the
-    neighbouring cue - two short lines shown together read fine, a delayed line does not.
+    neighbouring cue. The merged cue spans both, so no cue boundary moves and nothing loses sync - the text
+    only comes on screen earlier and stays longer.
 
-    A merge is refused when the joined text would not fit the cue layout (limit_chars), when the result would
-    run longer than max_duration, or when the two cues are more than max_merge_gap apart (they belong to
-    different moments). A cue that can be neither stretched nor merged - a full-length line squeezed between
-    two other full-length lines - borrows the missing time from whichever neighbour has time to spare, so no
-    cue is left flashing on screen for a frame or two.
+    limit_chars (the cue layout) is a preference, not a veto: a merge that fits it is chosen first, but when
+    the only alternative is a flash, the cues are merged anyway and the text takes an extra line - lines stay
+    within the line length, there are just more of them. A merge is refused only when the result would run
+    longer than max_duration or the two cues are more than max_merge_gap apart (different moments); such a cue
+    borrows the missing time from whichever neighbour has time to spare.
     """
     if min_duration <= 0 or not segments:
         return segments
@@ -327,12 +328,28 @@ def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: f
     def short(c: Dict) -> bool:
         return c["end"] - c["start"] < min_duration - 1e-6
 
-    def joinable(a: Dict, b: Dict) -> bool:
+    def joinable(a: Dict, b: Dict, layout: bool) -> bool:
         if max(0.0, b["start"] - a["end"]) > max_merge_gap:
             return False
         if max_duration > 0 and b["end"] - a["start"] > max_duration:
             return False
-        return limit_chars <= 0 or len(a.get("text", "")) + 1 + len(b.get("text", "")) <= limit_chars
+        if not layout or limit_chars <= 0:
+            return True
+        return len(a.get("text", "")) + 1 + len(b.get("text", "")) <= limit_chars
+
+    def pick(i: int, layout: bool) -> str:
+        """Which neighbour cue i should be glued to, '' for neither."""
+        fwd = i + 1 < len(cues) and joinable(cues[i], cues[i + 1], layout)
+        bwd = i > 0 and joinable(cues[i - 1], cues[i], layout)
+        if fwd and bwd:
+            # keep sentences whole: never glue a cue onto a finished sentence when it can go the other way
+            if _SENTENCE_END.search(cues[i - 1].get("text", "").rstrip()):
+                bwd = False
+            elif _SENTENCE_END.search(cues[i].get("text", "").rstrip()):
+                fwd = False
+            elif cues[i]["start"] - cues[i - 1]["end"] < cues[i + 1]["start"] - cues[i]["end"]:
+                fwd = False
+        return "fwd" if fwd else ("bwd" if bwd else "")
 
     for i in range(len(cues)):
         _grow(cues, i, min_duration, min_gap, max_duration)
@@ -342,34 +359,28 @@ def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: f
         if not short(cues[i]):
             i += 1
             continue
-        merged_at = i
-        fwd = i + 1 < len(cues) and joinable(cues[i], cues[i + 1])
-        bwd = i > 0 and joinable(cues[i - 1], cues[i])
-        if fwd and bwd:
-            # keep sentences whole: never glue a cue onto a finished sentence when it can go the other way
-            if _SENTENCE_END.search(cues[i - 1].get("text", "").rstrip()):
-                bwd = False
-            elif _SENTENCE_END.search(cues[i].get("text", "").rstrip()):
-                fwd = False
-            elif cues[i]["start"] - cues[i - 1]["end"] < cues[i + 1]["start"] - cues[i]["end"]:
-                fwd = False
-        if fwd:
-            cues[i:i + 2] = [_merged(cues[i], cues[i + 1], capitalize)]
-        elif bwd:
-            cues[i - 1:i + 1] = [_merged(cues[i - 1], cues[i], capitalize)]
-            i -= 1
-            merged_at = i
-        else:
-            # nothing to glue it to: show it a little early, and if that is still not enough (both
-            # neighbours are full-length lines, so the text will never fit a merge) take the missing
-            # time off a neighbour that can spare it - a flash is worse than a slightly early line
+        way = pick(i, layout=True)
+        if not way:
+            # free time around the cue keeps the two cues separate, which reads better than one longer cue
             _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
+            if not short(cues[i]):
+                i += 1
+                continue
+            way = pick(i, layout=False)          # an extra line beats a line nobody can read
+        if not way:
             _borrow(cues, i, min_duration, min_gap)
             i += 1
             continue
+        merged_at = i
+        if way == "fwd":
+            cues[i:i + 2] = [_merged(cues[i], cues[i + 1], capitalize)]
+        else:
+            cues[i - 1:i + 1] = [_merged(cues[i - 1], cues[i], capitalize)]
+            i -= 1
+            merged_at = i
         _grow(cues, merged_at, min_duration, min_gap, max_duration)   # the merged cue may still be short
 
-    for i in range(len(cues)):                    # merging can leave a cue that is still too short
+    for i in range(len(cues)):                    # a cue merging could not fix still gets its reading time
         if short(cues[i]):
             _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
             _borrow(cues, i, min_duration, min_gap)
@@ -452,9 +463,10 @@ def wrap_lines(text: str, max_line_chars: int, max_lines: int) -> str:
     """Balance a cue's text over as few lines as possible (no orphan words on the last line)"""
     if max_line_chars <= 0 or len(text) <= max_line_chars:
         return text
-    needed = -(-len(text) // max_line_chars)
-    if max_lines > 0:
-        needed = min(needed, max_lines)
+    # The line length is the hard limit, the line count is the target: text that does not fit max_lines
+    # takes another line instead of being crammed into over-wide ones. Cues out of split_segments always
+    # fit; merged cues and imported (resynced) ones are what can need the extra line.
+    needed = -(-len(text) // max_line_chars)      # max_lines (unused here) is the target
     # start from an even split and widen until the text fits in `needed` lines
     width = max(1, -(-len(text) // needed))
     while True:
