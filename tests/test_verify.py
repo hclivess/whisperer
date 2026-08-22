@@ -293,3 +293,50 @@ def test_a_replaced_cue_does_not_repeat_contractions():
     words = text.split()
     assert not any(a == b for a, b in zip(words, words[1:])), text
     assert text.count("that's") == 1 and text.count("it's") == 1
+
+
+def _one_word_each(words, start=0.0):
+    """A decode that has broken down into one capitalised, full-stopped word per segment."""
+    out, t = [], start
+    for w in words:
+        out.append({"start": round(t, 2), "end": round(t + 0.3, 2), "text": w.capitalize() + ".",
+                    "words": [{"start": round(t, 2), "end": round(t + 0.3, 2), "word": w.capitalize() + "."}],
+                    "avg_logprob": -0.05})
+        t += 0.35
+    return out
+
+
+def test_a_decode_that_broke_into_single_words_may_not_supply_text():
+    from utils.verify_utils import resolve_passes, _came_apart
+    spoken = ("the ferry leaves the harbour every morning at seven and returns before the evening tide "
+              "unless the weather turns and the crossing is called off for the day").split()
+    wrecked = _one_word_each(spoken)
+    assert _came_apart(wrecked)                         # judged over the decode, not the line
+    clean = [{"start": 0.0, "end": len(spoken) * 0.35, "text": " ".join(spoken), "avg_logprob": -0.9,
+              "words": [{"start": round(i * 0.35, 2), "end": round(i * 0.35 + 0.3, 2),
+                         "word": (" " if i else "") + w} for i, w in enumerate(spoken)]}]
+    out, report, _ = resolve_passes([decode(clean), decode(wrecked)], [(0.0, len(spoken) * 0.35)])
+    assert out[0]["text"] == " ".join(spoken)           # the wrecked pass does not get to write the cue
+    assert report["scored"] == 0 and report["dropped"] == 0
+
+
+def test_a_clean_pass_rescues_a_first_pass_that_broke_into_single_words():
+    from utils.verify_utils import resolve_passes
+    spoken = ("the ferry leaves the harbour every morning at seven and returns before the evening tide "
+              "unless the weather turns and the crossing is called off for the day").split()
+    wrecked = _one_word_each(spoken)
+    clean = [{"start": 0.0, "end": len(spoken) * 0.35, "text": " ".join(spoken), "avg_logprob": -0.2,
+              "words": [{"start": round(i * 0.35, 2), "end": round(i * 0.35 + 0.3, 2),
+                         "word": (" " if i else "") + w} for i, w in enumerate(spoken)]}]
+    out, report, _ = resolve_passes([decode(wrecked), decode(clean)], [(0.0, len(spoken) * 0.35)])
+    assert report["rebased"] is True                    # the clean pass becomes the transcript, timing and all
+    assert [c["text"] for c in out] == [" ".join(spoken)]
+    assert len(out) == 1                                # and the one-word-per-cue shape is gone with it
+
+
+def test_an_ordinary_decode_is_not_called_broken():
+    from utils.verify_utils import _came_apart
+    ordinary = [{"text": "the ferry leaves the harbour every morning at seven"},
+                {"text": "and returns before the evening tide unless the weather turns"},
+                {"text": "which happens perhaps twice a winter on that stretch of coast"}]
+    assert not _came_apart(ordinary)

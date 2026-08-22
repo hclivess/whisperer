@@ -145,6 +145,18 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.6
+
+- **A pass that has come apart is judged over the whole decode, not line by line.** The Title-Case guard
+  needs four words to judge a line, so a decode that breaks down into a single capitalised, full-stopped
+  word per cue slipped past it scoring zero on every line. Read across the whole decode the breakdown is
+  unmistakable — nearly every word capitalised, or nearly every segment holding one word — and such a pass
+  may still vote on whether a cue is real, but may never hand over any text.
+- **If the first pass is the one that came apart, a pass that did not takes over as the transcript**,
+  timing and all. Patching a wrecked decode cue by cue would leave its one-word-per-cue shape behind, and a
+  decode in that state has no timing worth keeping either. Only a pass that decoded the whole file can
+  stand in, and the swap is reported.
+
 ## Changes in 1.7.4
 
 - **A name now gets the case the rest of the file gives it.** Whisper writes *"Halloran"* in one window and

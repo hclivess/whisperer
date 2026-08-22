@@ -145,6 +145,31 @@ def _junk(text: str) -> float:
     return caps if caps > 0.6 else 0.0
 
 
+def _came_apart(segments: Sequence[Dict]) -> bool:
+    """
+    Did this whole decode fall apart, rather than one line of it?
+
+    _junk judges a line, and needs four words to do it - so a pass that breaks down into one word per
+    segment, capitalised and stopped like a list, scores zero on every line and walks straight past it.
+    Read over the whole decode the same breakdown is unmistakable: nearly every word capitalised, or nearly
+    every segment holding a single word. Such a pass may still vote on whether a cue is real; it may not
+    hand over any text.
+    """
+    words: List[str] = []
+    single = 0
+    for seg in segments:
+        tokens = [w for w in seg.get("text", "").split() if any(ch.isalnum() for ch in w)]
+        if len(tokens) == 1:
+            single += 1
+        words.extend(tokens)
+    if len(words) < 20:
+        return False
+    caps = sum(1 for w in words[1:] if w[:1].isupper()) / (len(words) - 1)
+    if caps > 0.6:
+        return True
+    return len(segments) >= 10 and single / len(segments) > 0.7 and caps > 0.35
+
+
 def _fully_seen(decode: Dict, start: float, end: float) -> bool:
     """
     Did this decode hear the whole stretch, or only part of it?
@@ -218,7 +243,8 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
     on them - the score decides them meanwhile, and they are counted as unresolved either way.
     """
     report = {"passes": len(decodes), "checked": 0, "confirmed": 0, "majority": 0, "scored": 0,
-              "cleaned": 0, "dropped": 0, "added": 0, "unresolved": 0, "removed": [], "review": []}
+              "cleaned": 0, "dropped": 0, "added": 0, "unresolved": 0, "rebased": False,
+              "removed": [], "review": []}
     if not decodes or not decodes[0].get("segments"):
         return (decodes[0].get("segments") if decodes else []), report, []
     first = decodes[0]["segments"]
@@ -226,8 +252,23 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
     if not others:
         return first, report, []
 
+    if _came_apart(first):
+        # the transcript being verified is itself the one that fell apart - one capitalised word per cue,
+        # stopped like a list. Patching it cue by cue would leave that shape behind, so a pass that did not
+        # come apart takes over as the transcript, timing and all: what came apart has no timing worth
+        # keeping either. Only a pass that decoded the whole file can stand in.
+        for i, other in enumerate(others):
+            segments = other.get("segments") or []
+            if not other.get("covers") and segments and not _came_apart(segments):
+                others = [{"segments": first, "covers": None}] + others[:i] + others[i + 1:]
+                first = segments
+                report["rebased"] = True
+                break
+
     prepared = [{"decode": d, "words": _words(d.get("segments") or []),
-                 "segments": d.get("segments") or []} for d in others]
+                 "segments": d.get("segments") or [],
+                 "apart": _came_apart(d.get("segments") or [])} for d in others]
+    base_apart = _came_apart(first)
     territories = _territories(first)
     out: List[Dict] = []
     unresolved: List[Region] = []
@@ -274,9 +315,10 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             if any(c["base"] for c in winners):
                 # same words, but the first pass's rendering may be the one that came apart: when a pass it
                 # agrees with says it in ordinary prose, that reading is the better copy of the same cue
-                tidy = [c for c in winners if not c["base"]
-                        and _junk(c.get("text", "")) + JUNK_MARGIN < _junk(seg.get("text", ""))
-                        and _seen_whole(c, territories[index])]
+                tidy = [c for c in winners if not c["base"] and _seen_whole(c, territories[index])
+                        and not c["pass"]["apart"]
+                        and (_junk(c.get("text", "")) + JUNK_MARGIN < _junk(seg.get("text", ""))
+                             or base_apart)]
                 if tidy:
                     pick = min(tidy, key=lambda c: _junk(c.get("text", "")))
                     replaced = _replace(seg, pick, territories[index])
@@ -354,6 +396,8 @@ def _may_replace(pick: Dict, base: Dict, territory: Region) -> bool:
     """
     if not _seen_whole(pick, territory):
         return False
+    if pick.get("pass") and pick["pass"]["apart"]:
+        return False                                  # this decode came apart: it votes, it does not write
     return _junk(pick.get("text", "")) <= _junk(base.get("text", "")) + JUNK_MARGIN
 
 
