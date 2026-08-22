@@ -13,8 +13,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
-from utils.subtitle_utils import (capitalize_sentences, merge_short_cues, split_segments,
-                                  strip_foreign_script, write_subtitles)
+from utils.subtitle_utils import (capitalize_sentences, merge_short_cues, repair_sentence_breaks,
+                                  split_segments, strip_foreign_script, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 
@@ -200,7 +200,7 @@ class _Worker(QThread):
                 should_stop=self._stop.is_set, wait_if_paused=self._wait_if_paused,
                 set_process=self._set_process, extra={"duration": qf.duration})
             engine_settings = dict(s)
-            if s.get("snap_to_speech") or s.get("sync_mode") == "resync":
+            if s.get("snap_to_speech") or s.get("sync_mode") == "resync" or s.get("repair_sentence_breaks"):
                 engine_settings["word_timestamps"] = True      # word-level alignment is what we snap / match
             segments, meta = BACKENDS[engine](audio_for_engine, engine_settings, cb)
             if self._stop.is_set():
@@ -218,6 +218,9 @@ class _Worker(QThread):
                 self.status.emit(f"Resync: offset {report['offset']:+.3f} s, speed {report['speed']:.5f} "
                                  f"({report['drift_per_hour']:+.1f} s/h), {report['inliers']}/{report['matches']} words agree")
             else:
+                if s.get("repair_sentence_breaks", True):
+                    # before splitting and snapping: the cue text is still Whisper's own, word for word
+                    segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
                 segments = split_segments(segments, int(s["max_line_chars"]), int(s["max_lines"]),
                                           float(s["max_segment_seconds"]))
 

@@ -172,3 +172,64 @@ def test_merge_short_cues_capitalises_across_a_full_stop():
     cues = [{"start": 0.50, "end": 0.51, "text": "Yeah."}, {"start": 0.60, "end": 3.0, "text": "so I said"}]
     assert merge_short_cues(cues, 0.8, 0.08, 7.0, 84)[0]["text"] == "Yeah. So I said"
     assert merge_short_cues(cues, 0.8, 0.08, 7.0, 84, capitalize=False)[0]["text"] == "Yeah. so I said"
+
+
+def _timed(text, t0, words):
+    """words: [(word, duration, gap before it)] -> a segment with word timestamps"""
+    out, t = [], t0
+    for w, dur, gap in words:
+        t += gap
+        out.append({"start": round(t, 3), "end": round(t + dur, 3), "word": " " + w})
+        t += dur
+    return {"start": t0, "end": round(t, 3), "text": text, "words": out}
+
+
+def test_repair_drops_a_full_stop_the_speaker_never_made():
+    from utils.subtitle_utils import repair_sentence_breaks
+    seg = _timed("When someone is. First about to embark on a minor task,", 8.5,
+                 [("When", .25, 0), ("someone", .3, .02), ("is.", .2, .02), ("First", .3, .04), ("about", .25, .02),
+                  ("to", .1, .02), ("embark", .35, .02), ("on", .1, .02), ("a", .08, .02), ("minor", .3, .02),
+                  ("task,", .4, .02)])
+    out = repair_sentence_breaks([seg])[0]
+    assert out["text"] == "When someone is first about to embark on a minor task,"
+    assert [w["word"] for w in out["words"]][2] == " is"        # the word list still spells the text
+
+
+def test_repair_keeps_a_real_sentence_end():
+    from utils.subtitle_utils import repair_sentence_breaks
+    seg = _timed("That's a common trope. It's the flight of the hero.", 35.6,
+                 [("That's", .3, 0), ("a", .1, .02), ("common", .3, .02), ("trope.", .4, .02), ("It's", .3, .70),
+                  ("the", .15, .02), ("flight", .3, .02), ("of", .1, .02), ("the", .1, .02), ("hero.", .4, .02)])
+    assert repair_sentence_breaks([seg])[0]["text"] == seg["text"]      # 700 ms of silence: the speaker stopped
+
+
+def test_repair_spans_cues_and_keeps_names():
+    from utils.subtitle_utils import repair_sentence_breaks
+    a = _timed("he encounters the whale Monstro. That", 30.0,
+               [("he", .2, 0), ("encounters", .4, .02), ("the", .1, .02), ("whale", .3, .02), ("Monstro.", .5, .02),
+                ("That", .3, .03)])
+    b = _timed("Monstro lives at the bottom.", 31.68,          # only 100 ms after "Monstro." - no pause
+               [("Monstro", .5, 0), ("lives", .3, .02), ("at", .1, .02), ("the", .1, .02), ("bottom.", .4, .02)])
+    a["words"] = a["words"][:-1]
+    a["text"] = "he encounters the whale Monstro."
+    out = repair_sentence_breaks([a, b])
+    # no pause after "Monstro." -> the stop goes, but the name keeps its capital (seen mid-sentence elsewhere)
+    assert out[0]["text"] == "he encounters the whale Monstro"
+    assert out[1]["text"] == "Monstro lives at the bottom."
+
+
+def test_repair_leaves_abbreviations_ellipses_and_decimals_alone():
+    from utils.subtitle_utils import repair_sentence_breaks
+    for text in ["I spoke to Dr. Smith about it", "so I was thinking... that we should go", "it cost 3.5 million",
+                 "he moved to the U.S. and stayed"]:
+        seg = _timed(text, 0.0, [(w, .2, .01) for w in text.split()])
+        assert repair_sentence_breaks([seg])[0]["text"] == text, text
+
+
+def test_repair_without_word_timestamps_only_touches_impossible_endings():
+    from utils.subtitle_utils import repair_sentence_breaks
+    cues = [{"start": 0, "end": 3, "text": "behind the facade of. Something else"},
+            {"start": 3, "end": 6, "text": "Magical. Agents of transformation."}]
+    out = [c["text"] for c in repair_sentence_breaks(cues)]
+    assert out[0] == "behind the facade of something else"   # "of." cannot end a sentence
+    assert out[1] == "Magical. Agents of transformation."    # no evidence: left alone

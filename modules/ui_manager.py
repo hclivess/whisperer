@@ -682,6 +682,24 @@ class UIManager(QWidget):
                                                          "script that makes up under 5 % of the transcript are removed; "
                                                          "genuinely bilingual files are left alone.")
         grid.addWidget(self.controls["strip_foreign_script"], 4, 0, 1, 2)
+        self.controls["repair_sentence_breaks"] = QCheckBox("Remove full stops the speaker never made")
+        self.controls["repair_sentence_breaks"].setChecked(True)
+        self.controls["repair_sentence_breaks"].setToolTip(
+            "Whisper punctuates by language model, not by ear, and sometimes ends a sentence in the middle of a "
+            "phrase (\"When someone is. First about to embark…\"). People pause between sentences, so a full stop "
+            "with less silence around it than below is the model's invention: it is removed and the next word goes "
+            "back to lower case. Names and \"I\" keep their capital. Needs word timestamps (on automatically).")
+        grid.addWidget(self.controls["repair_sentence_breaks"], 5, 0, 1, 2)
+        self.controls["sentence_pause_ms"] = QSpinBox()
+        self.controls["sentence_pause_ms"].setRange(0, 2000)
+        self.controls["sentence_pause_ms"].setSingleStep(50)
+        self.controls["sentence_pause_ms"].setSuffix(" ms")
+        self.controls["sentence_pause_ms"].setValue(250)
+        self.controls["sentence_pause_ms"].setToolTip("Silence a full stop needs to be believed. Raise it for a "
+                                                      "speaker who runs sentences together, lower it if real "
+                                                      "sentence ends are being joined.")
+        grid.addWidget(QLabel("Shortest pause between sentences:"), 6, 0)
+        grid.addWidget(self.controls["sentence_pause_ms"], 6, 1)
         layout_group.setLayout(grid)
         layout.addWidget(layout_group)
 
@@ -1125,6 +1143,8 @@ class UIManager(QWidget):
             "max_segment_seconds": c["max_segment_seconds"].value(),
             "capitalize_sentences": c["capitalize_sentences"].isChecked(),
             "strip_foreign_script": c["strip_foreign_script"].isChecked(),
+            "repair_sentence_breaks": c["repair_sentence_breaks"].isChecked(),
+            "sentence_pause_ms": c["sentence_pause_ms"].value(),
             "output_mode": c["output_mode"].currentData(),
             "output_dir": c["output_dir"].text().strip(),
             "suffix": c["suffix"].text().strip(),
