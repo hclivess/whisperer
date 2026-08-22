@@ -48,7 +48,22 @@ jobs:
           python -m pytest -q tests
 
       - name: Build with PyInstaller
-        run: python build.py
+        shell: bash
+        env:
+          # Set these two repository secrets to ship a signed Windows build. Without them the build is
+          # unsigned and SmartScreen will warn about an unknown publisher - see README, "Windows says the app
+          # is not safe". Any Authenticode certificate works (Azure Trusted Signing, SignPath, Certum, EV...).
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ] && [ -n "$WINDOWS_PFX_BASE64" ]; then
+            echo "$WINDOWS_PFX_BASE64" | base64 -d > "$RUNNER_TEMP/cert.pfx"
+            SIGNTOOL=$(cygpath -w "$(ls -1 "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/signtool.exe | tail -1)")
+            echo "Signing with $SIGNTOOL"
+            export SIGN_COMMAND="\"$SIGNTOOL\" sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f \"$(cygpath -w "$RUNNER_TEMP/cert.pfx")\" /p \"$WINDOWS_PFX_PASSWORD\" {file}"
+          fi
+          python build.py
+          rm -f "$RUNNER_TEMP/cert.pfx"
 
       - name: Smoke-test the frozen build (Linux)
         if: runner.os == 'Linux'

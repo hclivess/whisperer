@@ -110,6 +110,23 @@ audio (wrong language, different cut) is rejected with an explanation rather tha
 For `movie.mp4` with language English you get `movie.en.srt` (and any other selected formats). With *Embed into video*
 enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the original streams plus the subtitle track.
 
+## Windows says the app is not safe
+
+The Windows build is not code-signed yet, so SmartScreen shows *"Windows protected your PC — unknown
+publisher"* the first time you run it. Nothing is wrong with the file; an unsigned executable from a small
+project simply has no reputation with Microsoft.
+
+- **To run it:** *More info* → *Run anyway*. If the whole folder came out of a downloaded `.zip`, Windows also
+  tags it with the mark-of-the-web; `Unblock-File .\whisperer\*` in PowerShell clears that.
+- **To check you got what we built:** every release ships a `.sha256` next to the archive.
+  `Get-FileHash whisperer-1.3.5-windows-x64.zip` must print the same digest.
+- **If Defender quarantines it outright** (rather than just warning), that is a false positive on the
+  PyInstaller runtime — please report it at <https://www.microsoft.com/wdsi/filesubmission> and open an issue.
+
+The executable carries full publisher/product metadata and is built with `--onedir` (no self-extracting stub)
+and without UPX, which is what antivirus heuristics react to. The build is signature-ready: setting the
+`WINDOWS_PFX_BASE64` / `WINDOWS_PFX_PASSWORD` repository secrets makes CI sign and timestamp the `.exe`.
+
 ## Building binaries
 
 `python build.py` (needs `pip install pyinstaller`) produces a standalone PyInstaller build in `dist/`. Setting
