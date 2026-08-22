@@ -122,11 +122,10 @@ def capitalize_sentences(segments: List[Dict]) -> List[Dict]:
     return out
 
 
-# Words that cannot be the last word of a sentence. Used only when there are no word timestamps to look at.
-_CANNOT_END_SENTENCE = {
-    "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "from", "by", "into",
-    "about", "as", "than", "my", "your", "his", "her", "its", "our", "their", "every", "each", "another",
-}
+# Words that cannot be the last word of a sentence, whatever the speaker meant. Used only when there are no
+# word timestamps to measure the pause with, so it stays tiny: prepositions are NOT here, because English strands
+# them at the end of a sentence all the time ("things to attend to.", "what you're looking at.").
+_CANNOT_END_SENTENCE = {"a", "an", "the"}
 # Real abbreviations: their full stop is part of the word, never a sentence end.
 _ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "st", "vs", "etc", "e.g", "i.e", "no", "fig", "approx", "inc"}
 _DOT = re.compile(r"\.(?=\s|$)")
