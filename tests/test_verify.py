@@ -102,3 +102,57 @@ def test_a_replacement_never_borrows_the_neighbour_s_words():
     assert report["replaced"] == 1
     assert out[0]["text"] == "alpha bravo tango"          # not "... delta" from the cue next door
     assert out[1]["text"] == "delta echo foxtrot"
+
+
+def decode(segments, covers=None):
+    return {"segments": segments, "covers": covers}
+
+
+def test_three_passes_settle_a_disagreement_by_majority():
+    from utils.verify_utils import resolve_passes
+    first = [seg(0.0, 4.0, "the mitochondria is the powerhouse", avg_logprob=-0.1)]
+    second = [seg(0.0, 4.0, "the immigration is the power source", avg_logprob=-0.9)]
+    third = [seg(0.0, 4.0, "the immigration is the power source", avg_logprob=-0.9)]
+    out, report, unresolved = resolve_passes([decode(first), decode(second), decode(third)], [(0.0, 4.0)])
+    # two of the three say the same thing: they win, however sure the first pass was of itself
+    assert out[0]["text"] == "the immigration is the power source"
+    assert report["majority"] == 1 and report["unresolved"] == 0 and unresolved == []
+
+
+def test_a_third_pass_that_agrees_with_the_first_confirms_it():
+    from utils.verify_utils import resolve_passes
+    first = [seg(0.0, 4.0, "the mitochondria is the powerhouse", avg_logprob=-0.9)]
+    second = [seg(0.0, 4.0, "the immigration is the power source", avg_logprob=-0.1)]
+    third = [seg(0.0, 4.0, "the mitochondria is the powerhouse", avg_logprob=-0.9)]
+    out, report, unresolved = resolve_passes([decode(first), decode(second), decode(third)], [(0.0, 4.0)])
+    assert out[0]["text"] == "the mitochondria is the powerhouse"
+    assert report["confirmed"] == 1 and not unresolved
+
+
+def test_three_way_disagreement_stays_unresolved():
+    from utils.verify_utils import resolve_passes
+    first = [seg(0.0, 4.0, "alpha bravo charlie delta")]
+    second = [seg(0.0, 4.0, "whiskey tango foxtrot romeo")]
+    third = [seg(0.0, 4.0, "sierra kilo november zulu")]
+    out, report, unresolved = resolve_passes([decode(first), decode(second), decode(third)], [(0.0, 4.0)])
+    assert len(out) == 1 and report["unresolved"] == 1
+    assert unresolved == [(0.0, 4.0)]                        # hand it back: it wants another decode
+
+
+def test_a_targeted_pass_only_votes_where_it_looked():
+    from utils.verify_utils import resolve_passes
+    first = [seg(0.0, 4.0, "one two three four"), seg(100.0, 104.0, "five six seven eight")]
+    second = [seg(0.0, 4.0, "one two three four"), seg(100.0, 104.0, "five six seven eight")]
+    # a third pass aimed at the first window only: it says nothing about the cue at 100 s, so it is not
+    # allowed to vote it away
+    third = decode([seg(0.0, 4.0, "one two three four")], covers=[(0.0, 30.0)])
+    out, report, _ = resolve_passes([decode(first), decode(second), third], [(0.0, 4.0), (100.0, 104.0)])
+    assert len(out) == 2 and report["dropped"] == 0
+
+
+def test_merge_windows_groups_neighbours_into_whole_encoder_windows():
+    from utils.verify_utils import merge_windows
+    assert merge_windows([(41.0, 44.0), (52.0, 55.0)]) == [(30.0, 60.0)]
+    assert merge_windows([(10.0, 12.0), (400.0, 402.0)]) == [(0.0, 30.0), (390.0, 420.0)]
+    assert merge_windows([(95.0, 99.0)], duration=97.0) == [(90.0, 97.0)]
+    assert merge_windows([]) == []

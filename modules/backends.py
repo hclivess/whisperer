@@ -143,6 +143,16 @@ def transcribe_faster_whisper(audio_path: str, settings: Dict, cb: TranscribeCal
         kwargs["vad_parameters"] = dict(min_silence_duration_ms=int(settings["vad_min_silence_ms"]))
     if settings.get("initial_prompt"):
         kwargs["initial_prompt"] = settings["initial_prompt"]
+    if settings.get("temperature") is not None:
+        # a verification pass has to be an independent draw: at temperature 0 the same settings give the
+        # same output, and decoding the file twice would prove nothing
+        kwargs["temperature"] = float(settings["temperature"])
+    spans = settings.get("clip_spans") or []
+    if spans:
+        # only these stretches of audio, for a pass that is re-checking what earlier passes disagreed on
+        kwargs["clip_timestamps"] = [float(t) for span in spans for t in (span[0], span[1])]
+        kwargs["vad_filter"] = False              # the windows are the selection now
+        kwargs.pop("vad_parameters", None)
 
     cb.status("Transcribing…")
     segments_iter, info = model.transcribe(audio_path, **kwargs)
@@ -226,6 +236,8 @@ def transcribe_whisper_cpp(audio_path: str, settings: Dict, cb: TranscribeCallba
         cmd += ["-t", str(int(settings["cpu_threads"]))]
     if settings.get("initial_prompt"):
         cmd += ["--prompt", settings["initial_prompt"]]
+    if settings.get("temperature") is not None:
+        cmd += ["-tp", str(float(settings["temperature"]))]
     if settings.get("device") == "cpu":
         cmd.append("-ng")
     if settings.get("extra_args"):

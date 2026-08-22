@@ -19,9 +19,10 @@ A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress
 - Live queue: add files / folders or drag & drop while a run is in progress, reorder by dragging, pause / resume / stop
 - Live transcript panel — segments appear as they are decoded
 - Progress panel: per-file and overall bars, ETA, speed (× realtime), position, segment count
-- **Second pass against hallucinations** (on by default) — every file is decoded twice and only what both
-  decodes agree on is kept; text with no audio under it (*"Thank you for watching"*, repetition loops) is dropped
-  on the evidence of the second decode and the VAD, and speech the first pass skipped is recovered
+- **Multi-pass verification against hallucinations** (3 passes by default) — the file is decoded more than
+  once and only what the decodes agree on is kept; text with no audio under it (*"Thank you for watching"*,
+  repetition loops) is dropped on the evidence of the other passes and the VAD, and speech the first pass
+  skipped is recovered. Passes 3+ only re-decode the spans nothing agreed on
 - **Timing that follows the audio** — cues are snapped to speech on/offsets found by a voice-activity detector
   (Silero VAD), held a moment after speech, never overlapping; word-level alignment is used to build the cues
 - **Resync existing subtitles** (the SubSync idea, built in): match an `.srt` / `.vtt` against a transcript of the
@@ -103,7 +104,7 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 | Cue appears before the line is spoken / stays on after it | **Snap cues to detected speech** (Sync tab, on by default): every cue start/end is moved onto the nearest speech onset/offset within *Max shift* (600 ms), cues that run over silence are cut, then *Hold after speech* (200 ms), *Min cue duration* and *Min gap* are applied. Word timestamps are used automatically. |
 | A sentence is cut in half and a new one starts mid-phrase | **Remove full stops the speaker never made** (Subtitles tab, on by default): Whisper punctuates by language model, not by ear, and regularly ends a sentence inside a phrase — *"When someone is. First about to embark on a minor task"*. People pause between sentences, so a full stop with less than *Shortest pause between sentences* (250 ms) of silence around it is the model's invention: it is removed and the next word goes back to lower case. Names (seen capitalised mid-sentence elsewhere) and *I* keep their capital; abbreviations, initials, decimals and `...` are never touched. Without word timestamps almost nothing is repaired — only `a.` / `an.` / `the.`, which cannot end an English sentence under any reading. |
 | A cue flashes on screen for a fraction of a second | **Merge cues that stay too short into their neighbour** (Sync tab, on by default): Whisper emits segments as short as 10 ms, and a cue squeezed against the next one cannot reach *Min cue duration* on its own. Such a cue is first stretched into the free time after it and, if there is none, glued to the cue beside it — two short lines shown together read fine, a line held over the next one's speech does not. The cue layout is a preference here, not a veto: when the joined text does not fit *Max lines*, the cues are merged anyway and the text takes an extra line (lines never go over *Max line length*) — the merged cue spans exactly the two it replaces, so no boundary moves and nothing loses sync. This runs in every mode, **resync included**. Merging is only refused when the result would run past *Max cue duration* or the two cues are over 1.5 s apart; such a cue borrows the missing time from a neighbour that has it to spare, so it still reaches *Min cue duration*. |
-| Whole paragraphs nobody said (*"Thank you for watching"*, a line repeated forty times) | **Second pass** (Model tab, on by default): the file is decoded twice — the second time with no context carried over (a repetition loop cannot feed itself twice), a different beam, and the names the first pass settled on handed back as the prompt. A hallucination is text with no audio under it, so the text alone can never prove it: what both passes produce is kept, a cue the second pass heard nothing under **and** the VAD finds no speech in is dropped, a disagreement goes to whichever decode the audio supports (Whisper's own `avg_logprob` / `no_speech_prob` / compression ratio, plus how much speech is actually in the span), and speech the first pass skipped but the second pass and the VAD both found is recovered. Timing is always the first pass's, and no words are ever rewritten. Costs one more decode of the file — untick it to halve the transcription time. |
+| Whole paragraphs nobody said (*"Thank you for watching"*, a line repeated forty times) | **Passes** (Model tab, 3 by default): the file is decoded more than once — each pass with no context carried over (a repetition loop cannot feed itself twice), a different beam, then sampling temperature, and the names the first pass settled on handed back as the prompt. A hallucination is text with no audio under it, so the text alone can never prove it: **agreement decides**, because invented text is often fluent and scores well but two decodes rarely invent the *same* words. Text two passes agree on is kept, a cue no other pass heard anything under **and** the VAD finds no speech in is dropped, and speech the first pass skipped but a later pass and the VAD both found is recovered. Only when no two passes agree does Whisper's own confidence (`avg_logprob`, `no_speech_prob`, compression ratio, and how much speech is really in the span) pick the winner — and that cue is reported as unresolved rather than quietly trusted. Passes 3+ re-decode only the unresolved spans, snapped out to Whisper's 30 s encoder window, so they cost a fraction of a full pass. Timing is always the first pass's and no words are ever rewritten. Set *Passes* to 1 for a single decode. |
 | Everything early by a constant amount | Audio streams with a non-zero start time are now extracted in place (`aresample=first_pts=0`), and timestamp gaps are filled with silence so nothing drifts over dropped packets. If you still want a nudge: **Global offset**. |
 | Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
 
@@ -139,6 +140,21 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.5.0
+
+- **Passes: 1–5, three by default.** The second pass of 1.4.0 became a number. Every pass differs from the
+  ones before it — no context carried over, another beam, then sampling temperature — because identical
+  settings would only repeat the same computation and prove nothing.
+- **Agreement decides, not confidence.** Text that two passes produce is kept whatever the scores say;
+  invented text is often fluent and scores well, but two independent decodes hardly ever invent the same
+  words. Whisper's confidence numbers now only break a tie where *no* two passes agree, and that cue is
+  counted as unresolved in the report instead of being quietly trusted.
+- **Passes 3+ only re-decode what is still contested**, snapped out to Whisper's 30 s encoder window so a run
+  of neighbouring disagreements costs one decode rather than ten. Past a quarter of the file it decodes the
+  whole thing again instead, because that is cheaper. A pass aimed at a few windows only votes inside them.
+- Deleting a cue is decided by votes alone (the other passes plus the VAD's vote for silence) — no confidence
+  number can remove a line on its own.
 
 ## Changes in 1.4.0
 
