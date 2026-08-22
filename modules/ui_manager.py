@@ -536,6 +536,15 @@ class UIManager(QWidget):
         self.controls["initial_prompt"].setPlaceholderText("e.g. Hello, welcome to the Videer podcast with Jan Kučera.")
         self.controls["initial_prompt"].setMaximumHeight(80)
         pl.addWidget(self.controls["initial_prompt"])
+        self.controls["hotwords"] = QLineEdit()
+        self.controls["hotwords"].setPlaceholderText("Hotwords: mating game, Kučera, Hypernode")
+        self.controls["hotwords"].setToolTip(
+            "Terms to weight the decoder towards, comma separated. Whisper decodes what it half hears into the "
+            "commoner word - \"mating game\" becomes \"marriage\" - and no amount of re-decoding fixes that, "
+            "because every pass hears the same audio the same way. Naming the words is the only thing that "
+            "prevents it. Unlike the initial prompt these are not text the model may echo or imitate. The "
+            "names the first pass settled on are added automatically for the later passes. faster-whisper only.")
+        pl.addWidget(self.controls["hotwords"])
         prompt_group.setLayout(pl)
         layout.addWidget(prompt_group)
         layout.addStretch()
@@ -722,6 +731,12 @@ class UIManager(QWidget):
             "sentence does not end on (\"to\", \"the\", \"and\"), and a word this transcript never writes in "
             "lower case may be a name, so it keeps its capital. Needs word timestamps (on automatically).")
         grid.addWidget(self.controls["repair_sentence_starts"], 6, 0, 1, 2)
+        self.controls["review_list"] = QCheckBox("Write a review list (.review.txt)")
+        self.controls["review_list"].setToolTip(
+            "Off by default. Writes the places worth a human eye next to the subtitles: every span where the "
+            "passes disagreed with what each of them said, and the cues the decoder was least sure of. "
+            "Nothing is rewritten - a mis-hearing every pass agrees on can only be found by reading.")
+        grid.addWidget(self.controls["review_list"], 8, 0, 1, 2)
         self.controls["sentence_pause_ms"] = QSpinBox()
         self.controls["sentence_pause_ms"].setRange(0, 2000)
         self.controls["sentence_pause_ms"].setSingleStep(50)
@@ -1159,6 +1174,7 @@ class UIManager(QWidget):
             "condition_on_previous_text": c["condition_on_previous_text"].isChecked(),
             "passes": c["passes"].value(),
             "initial_prompt": c["initial_prompt"].toPlainText().strip(),
+            "hotwords": c["hotwords"].text().strip(),
             "extra_args": c["extra_args"].text().strip(),
             "sync_mode": c["sync_mode"].currentData(),
             "snap_to_speech": c["snap_to_speech"].isChecked(),
@@ -1178,6 +1194,7 @@ class UIManager(QWidget):
             "strip_foreign_script": c["strip_foreign_script"].isChecked(),
             "repair_sentence_breaks": c["repair_sentence_breaks"].isChecked(),
             "repair_sentence_starts": c["repair_sentence_starts"].isChecked(),
+            "review_list": c["review_list"].isChecked(),
             "sentence_pause_ms": c["sentence_pause_ms"].value(),
             "output_mode": c["output_mode"].currentData(),
             "output_dir": c["output_dir"].text().strip(),

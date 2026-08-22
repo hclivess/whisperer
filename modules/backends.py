@@ -143,6 +143,10 @@ def transcribe_faster_whisper(audio_path: str, settings: Dict, cb: TranscribeCal
         kwargs["vad_parameters"] = dict(min_silence_duration_ms=int(settings["vad_min_silence_ms"]))
     if settings.get("initial_prompt"):
         kwargs["initial_prompt"] = settings["initial_prompt"]
+    if settings.get("hotwords"):
+        # terms to weight the decoder towards, without a prompt's side effects: this is what stops
+        # "mating game" being decoded as the commoner word it half sounds like
+        kwargs["hotwords"] = settings["hotwords"]
     if settings.get("temperature") is not None:
         # a verification pass has to be an independent draw: at temperature 0 the same settings give the
         # same output, and decoding the file twice would prove nothing

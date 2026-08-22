@@ -18,7 +18,7 @@ from utils.subtitle_utils import (capitalize_sentences, enforce_min_duration, me
                                   strip_foreign_script, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
-from utils.verify_utils import merge_windows, resolve_passes, vocabulary_prompt
+from utils.verify_utils import merge_windows, resolve_passes, review_lines, vocabulary_prompt
 
 try:
     import psutil
@@ -223,7 +223,9 @@ class _Worker(QThread):
                 # same computation. From the third pass on only the spans nothing agreed on are decoded
                 # again, snapped out to Whisper's 30 s window so a run of them costs one decode.
                 regions = speech_regions(audio_for_engine)
-                prompt = vocabulary_prompt(segments, s.get("initial_prompt", ""))
+                # the names the first pass settled on go to the decoder as hotwords, next to the user's
+                # own; the initial prompt stays exactly what the user wrote
+                learned = vocabulary_prompt(segments, s.get("hotwords", ""))
                 decodes = [{"segments": segments, "covers": None}]
                 report, unresolved = None, []
                 for n in range(2, wanted + 1):
@@ -242,7 +244,7 @@ class _Worker(QThread):
                     pass_settings = dict(engine_settings)
                     pass_settings["condition_on_previous_text"] = False
                     pass_settings["beam_size"] = 1 if int(s.get("beam_size", 5)) > 1 else 5
-                    pass_settings["initial_prompt"] = prompt
+                    pass_settings["hotwords"] = learned
                     if n > 2:
                         pass_settings["temperature"] = round(0.2 * (n - 2), 2)
                     if spans:
@@ -256,7 +258,15 @@ class _Worker(QThread):
                     if not unresolved:
                         break
                 if report:
+                    review = report.pop("review", [])
                     meta["passes"] = report
+                    if s.get("review_list"):
+                        report["review"] = review
+                        path = f"{base_path}.review.txt"
+                        with open(path, "w", encoding="utf-8") as fh:
+                            fh.write("\n".join(review_lines(report, segments, os.path.basename(src))) + "\n")
+                        report.pop("review", None)
+                        self.status.emit(f"Review list written: {os.path.basename(path)}")
                     self.status.emit(
                         f"{report['passes']} passes: {report['confirmed']} cue(s) agreed, "
                         f"{report['majority']} fixed by majority, {report['scored']} by score, "
