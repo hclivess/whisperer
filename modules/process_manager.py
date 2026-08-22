@@ -18,7 +18,7 @@ from utils.subtitle_utils import (capitalize_sentences, enforce_min_duration, me
                                   write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
-from utils.verify_utils import verify_second_pass, vocabulary_prompt
+from utils.verify_utils import merge_windows, resolve_passes, vocabulary_prompt
 
 try:
     import psutil
@@ -176,9 +176,10 @@ class _Worker(QThread):
             self.file_state.emit(index, "processing", "")
             seg_count = [0]
             t0 = time.time()
-            second_pass = bool(s.get("second_pass", True)) and s.get("sync_mode") != "resync"
+            wanted = max(1, min(5, int(s.get("passes", 2))))
+            verify = wanted > 1 and s.get("sync_mode") != "resync"
             phase = [0]                       # which decode we are in, when the file is transcribed twice
-            phases = 2 if second_pass else 1
+            phases = wanted if verify else 1
 
             def on_progress(done, total):
                 total_len = total or qf.duration or 0
@@ -208,34 +209,59 @@ class _Worker(QThread):
                 set_process=self._set_process, extra={"duration": qf.duration})
             engine_settings = dict(s)
             if (s.get("snap_to_speech") or s.get("sync_mode") == "resync" or s.get("repair_sentence_breaks")
-                    or second_pass):
+                    or verify):
                 engine_settings["word_timestamps"] = True      # word-level alignment is what we snap / match
             segments, meta = BACKENDS[engine](audio_for_engine, engine_settings, cb)
             if self._stop.is_set():
                 raise StoppedError()
 
             regions = None
-            if second_pass and segments:
-                # A second, independent decode of the same audio: no context carried over (a repetition loop
-                # cannot feed itself twice), a different beam, and the names the first pass settled on handed
-                # back as the prompt. What both passes produce is trusted; what only one produced is decided
-                # by whether the VAD heard anything there.
-                phase[0] = 1
-                self.status.emit(f"Second pass (verifying the transcript): {qf.name}")
-                second_settings = dict(engine_settings)
-                second_settings["condition_on_previous_text"] = False
-                second_settings["beam_size"] = 1 if int(s.get("beam_size", 5)) > 1 else 5
-                second_settings["initial_prompt"] = vocabulary_prompt(segments, s.get("initial_prompt", ""))
-                second, _second_meta = BACKENDS[engine](audio_for_engine, second_settings, cb)
-                if self._stop.is_set():
-                    raise StoppedError()
-                self.status.emit("Comparing the two passes…")
+            if verify and segments:
+                # Decode the same audio again and keep what the decodes agree on. Every pass differs from
+                # the ones before it - no context carried over (a repetition loop cannot feed itself twice),
+                # another beam, then sampling temperature - because identical settings would just repeat the
+                # same computation. From the third pass on only the spans nothing agreed on are decoded
+                # again, snapped out to Whisper's 30 s window so a run of them costs one decode.
                 regions = speech_regions(audio_for_engine)
-                segments, report = verify_second_pass(segments, second, regions)
-                meta["second_pass"] = report
-                self.status.emit(
-                    f"Second pass: {report['confirmed']} cue(s) confirmed, {report['replaced']} corrected, "
-                    f"{report['dropped']} dropped as hallucinated, {report['added']} recovered")
+                prompt = vocabulary_prompt(segments, s.get("initial_prompt", ""))
+                decodes = [{"segments": segments, "covers": None}]
+                report, unresolved = None, []
+                for n in range(2, wanted + 1):
+                    phase[0] = n - 1
+                    spans = None
+                    if n > 2:
+                        if not unresolved:
+                            break
+                        spans = merge_windows(unresolved, duration=qf.duration or 0)
+                        covered = sum(e - b for b, e in spans)
+                        if engine != "faster_whisper" or (qf.duration and covered > 0.25 * qf.duration):
+                            spans = None      # past a quarter of the file, decoding all of it is cheaper
+                    self.status.emit(f"Pass {n} of {wanted}: "
+                                     + (f"re-checking {len(spans)} unresolved window(s)" if spans
+                                        else f"decoding {qf.name} again"))
+                    pass_settings = dict(engine_settings)
+                    pass_settings["condition_on_previous_text"] = False
+                    pass_settings["beam_size"] = 1 if int(s.get("beam_size", 5)) > 1 else 5
+                    pass_settings["initial_prompt"] = prompt
+                    if n > 2:
+                        pass_settings["temperature"] = round(0.2 * (n - 2), 2)
+                    if spans:
+                        pass_settings["clip_spans"] = spans
+                    extra, _extra_meta = BACKENDS[engine](audio_for_engine, pass_settings, cb)
+                    if self._stop.is_set():
+                        raise StoppedError()
+                    decodes.append({"segments": extra, "covers": spans})
+                    self.status.emit(f"Comparing {len(decodes)} passes…")
+                    segments, report, unresolved = resolve_passes(decodes, regions)
+                    if not unresolved:
+                        break
+                if report:
+                    meta["passes"] = report
+                    self.status.emit(
+                        f"{report['passes']} passes: {report['confirmed']} cue(s) agreed, "
+                        f"{report['majority']} fixed by majority, {report['scored']} by score, "
+                        f"{report['dropped']} dropped as hallucinated, {report['added']} recovered, "
+                        f"{report['unresolved']} left unresolved")
 
             if s.get("sync_mode") == "resync":
                 sub_path = self._resync_source(src, s)
