@@ -134,7 +134,23 @@ def test_merge_short_cues_refuses_when_text_would_not_fit():
     long = "x" * 84
     cues = [{"start": 0.0, "end": 0.05, "text": "No"}, {"start": 0.05, "end": 4.0, "text": long}]
     out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
-    assert len(out) == 2 and out[0]["text"] == "No"        # left alone rather than delaying the next line
+    assert len(out) == 2 and out[0]["text"] == "No"        # the joined text would not fit: no merge
+    assert abs(out[0]["end"] - out[0]["start"] - 0.8) < 1e-6   # but it still gets its reading time,
+    assert abs(out[1]["end"] - out[1]["start"] - 3.12) < 1e-6  # borrowed from a neighbour that has it
+
+
+def test_merge_short_cues_borrows_from_a_neighbour_when_nothing_fits():
+    from utils.subtitle_utils import merge_short_cues
+    # a full line squeezed to 80 ms between two full lines: no free time, and no merge can fit the layout
+    cues = [{"start": 2012.258, "end": 2016.380, "text": "why so often when you're arguing with " + "x" * 40},
+            {"start": 2016.460, "end": 2016.540, "text": "come up and you're like oh my god " + "x" * 48},
+            {"start": 2016.620, "end": 2022.860, "text": "you know and then things explode " + "x" * 44}]
+    out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
+    assert len(out) == 3
+    assert all(c["end"] - c["start"] >= 0.8 - 1e-6 for c in out)
+    assert all(out[i + 1]["start"] - out[i]["end"] >= 0.08 - 1e-6 for i in range(2))
+    assert out[0]["start"] == 2012.258 and out[2]["end"] == 2022.860   # the run keeps its outer timing
+    assert abs(out[1]["end"] - 2016.540) < 1e-6      # the flashing cue kept its end, it starts earlier
 
 
 def test_merge_short_cues_keeps_sentences_whole():
@@ -236,3 +252,27 @@ def test_repair_without_word_timestamps_only_touches_impossible_endings():
     assert out[1] == "Magical. Agents of transformation."        # no evidence: left alone
     # a stranded preposition is a perfectly good sentence end - without a measured pause, hands off
     assert out[2] == "an indefinite number of things to attend to. So if you were painting"
+
+
+def test_enforce_min_duration_fixes_a_resynced_subtitle_without_touching_text():
+    from utils.subtitle_utils import enforce_min_duration
+    # the shape a resync leaves behind: imported two-line cues, one of them squeezed to 80 ms by snapping.
+    # Merging is not allowed to rewrite someone else's file, so the timing alone has to fix it.
+    cues = [{"start": 2012.258, "end": 2016.380, "text": "why so often when you're arguing with\nsomeone you love some trivial thing will"},
+            {"start": 2016.460, "end": 2016.540, "text": "come up and you're like oh my god I don't\nknow what the hell's wrong with this car"},
+            {"start": 2016.620, "end": 2022.860, "text": "you know and then things explode around\nit's because that trivial thing is an"}]
+    out = enforce_min_duration(cues, min_duration=0.8, min_gap=0.08)
+    assert [c["text"] for c in out] == [c["text"] for c in cues]      # not one character rewritten
+    assert all(c["end"] - c["start"] >= 0.8 - 1e-6 for c in out)
+    assert all(out[i + 1]["start"] - out[i]["end"] >= 0.08 - 1e-6 for i in range(2))
+    assert out[0]["start"] == 2012.258 and out[2]["end"] == 2022.860  # the run keeps its outer timing
+
+
+def test_enforce_min_duration_leaves_a_run_it_cannot_fix_alone():
+    from utils.subtitle_utils import enforce_min_duration
+    # every neighbour is at the floor already: nothing to borrow, and nothing is made worse by trying
+    cues = [{"start": 0.0, "end": 0.8, "text": "a"}, {"start": 0.88, "end": 0.98, "text": "b"},
+            {"start": 1.06, "end": 1.86, "text": "c"}]
+    out = enforce_min_duration(cues, min_duration=0.8, min_gap=0.08)
+    assert [round(c["start"], 3) for c in out] == [0.0, 0.88, 1.06]
+    assert [round(c["end"], 3) for c in out] == [0.8, 0.98, 1.86]

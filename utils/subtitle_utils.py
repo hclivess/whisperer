@@ -276,6 +276,33 @@ def _grow(cues: List[Dict], i: int, min_duration: float, min_gap: float, max_dur
     cue["start"] = min(cue["start"], max(cue["end"] - min_duration, floor))
 
 
+def _borrow(cues: List[Dict], i: int, min_duration: float, min_gap: float) -> None:
+    """
+    Last resort for a cue that can be neither grown nor merged: take screen time from a neighbour that has
+    it to spare. A donor never drops below min_duration itself, so nothing is fixed by breaking something.
+
+    Time is taken from the earlier cue first - our line then comes up a beat before its speech, which reads
+    fine, while pushing the next cue back would put that line on screen after its own words were spoken.
+    """
+    cue = cues[i]
+    need = min_duration - (cue["end"] - cue["start"])
+    if need <= 1e-6:
+        return
+    if i > 0:
+        prev = cues[i - 1]
+        take = min(need, (prev["end"] - prev["start"]) - min_duration)
+        if take > 1e-6:
+            cue["start"] -= take
+            prev["end"] = min(prev["end"], cue["start"] - min_gap)
+            need -= take
+    if need > 1e-6 and i + 1 < len(cues):
+        nxt = cues[i + 1]
+        take = min(need, (nxt["end"] - nxt["start"]) - min_duration)
+        if take > 1e-6:
+            cue["end"] += take
+            nxt["start"] = max(nxt["start"], cue["end"] + min_gap)
+
+
 def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: float = 0.08,
                      max_duration: float = 7.0, limit_chars: int = 84,
                      max_merge_gap: float = 1.5, capitalize: bool = True) -> List[Dict]:
@@ -289,7 +316,9 @@ def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: f
 
     A merge is refused when the joined text would not fit the cue layout (limit_chars), when the result would
     run longer than max_duration, or when the two cues are more than max_merge_gap apart (they belong to
-    different moments). Cues that cannot be fixed either way are left as they are.
+    different moments). A cue that can be neither stretched nor merged - a full-length line squeezed between
+    two other full-length lines - borrows the missing time from whichever neighbour has time to spare, so no
+    cue is left flashing on screen for a frame or two.
     """
     if min_duration <= 0 or not segments:
         return segments
@@ -331,12 +360,39 @@ def merge_short_cues(segments: List[Dict], min_duration: float = 0.8, min_gap: f
             i -= 1
             merged_at = i
         else:
-            # nothing to glue it to: show it a little early rather than leaving a flash on screen
+            # nothing to glue it to: show it a little early, and if that is still not enough (both
+            # neighbours are full-length lines, so the text will never fit a merge) take the missing
+            # time off a neighbour that can spare it - a flash is worse than a slightly early line
             _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
+            _borrow(cues, i, min_duration, min_gap)
             i += 1
             continue
         _grow(cues, merged_at, min_duration, min_gap, max_duration)   # the merged cue may still be short
 
+    for i in range(len(cues)):                    # merging can leave a cue that is still too short
+        if short(cues[i]):
+            _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
+            _borrow(cues, i, min_duration, min_gap)
+
+    return cues
+
+
+def enforce_min_duration(segments: List[Dict], min_duration: float = 0.8, min_gap: float = 0.08,
+                         max_duration: float = 0.0) -> List[Dict]:
+    """
+    The floor every cue leaves the pipeline with: min_duration on screen whenever the time can be found.
+
+    This is timing only - no text is joined, no cue disappears - so it also runs over a resynced subtitle,
+    where merging cues would rewrite someone else's file, and over cues that merging had to refuse. Free
+    time around the cue is used first; what is still missing is borrowed from a neighbour that can spare it.
+    """
+    if min_duration <= 0 or not segments:
+        return segments
+    cues = [dict(s) for s in segments]
+    for i in range(len(cues)):
+        if cues[i]["end"] - cues[i]["start"] < min_duration - 1e-6:
+            _grow(cues, i, min_duration, min_gap, max_duration, earlier=True)
+            _borrow(cues, i, min_duration, min_gap)
     return cues
 
 
