@@ -143,15 +143,15 @@ def test_merge_short_cues_merges_a_full_line_squeezed_between_full_lines():
     from utils.subtitle_utils import merge_short_cues
     # the 80 ms cue in the middle: no free time, and no merge fits 42x2 - it is merged anyway, and the
     # merged cue spans exactly the two it replaces, so nothing in the file moves out of sync
-    cues = [{"start": 2012.258, "end": 2016.380, "text": "why so often when you're arguing with " + "x" * 40},
-            {"start": 2016.460, "end": 2016.540, "text": "come up and you're like oh my god " + "x" * 48},
-            {"start": 2016.620, "end": 2022.860, "text": "you know and then things explode " + "x" * 44}]
+    cues = [{"start": 2012.258, "end": 2016.380, "text": "the first full line of an ordinary cue " + "x" * 40},
+            {"start": 2016.460, "end": 2016.540, "text": "the second one squeezed against it " + "x" * 48},
+            {"start": 2016.620, "end": 2022.860, "text": "and the third one after that " + "x" * 44}]
     out = merge_short_cues(cues, min_duration=0.8, min_gap=0.08, max_duration=7.0, limit_chars=84)
     assert len(out) == 2
     assert all(c["end"] - c["start"] >= 0.8 - 1e-6 for c in out)
     assert [c["start"] for c in out] == [2012.258, 2016.460]   # every start is where it always was
     assert [c["end"] for c in out] == [2016.380, 2022.860]
-    assert out[1]["text"].startswith("come up") and out[1]["text"].endswith("x" * 44)
+    assert out[1]["text"].startswith("the second one") and out[1]["text"].endswith("x" * 44)
 
 
 def test_wrap_lines_never_makes_a_line_wider_than_the_limit():
@@ -268,9 +268,9 @@ def test_enforce_min_duration_fixes_a_resynced_subtitle_without_touching_text():
     from utils.subtitle_utils import enforce_min_duration
     # the shape a resync leaves behind: imported two-line cues, one of them squeezed to 80 ms by snapping.
     # Merging is not allowed to rewrite someone else's file, so the timing alone has to fix it.
-    cues = [{"start": 2012.258, "end": 2016.380, "text": "why so often when you're arguing with\nsomeone you love some trivial thing will"},
-            {"start": 2016.460, "end": 2016.540, "text": "come up and you're like oh my god I don't\nknow what the hell's wrong with this car"},
-            {"start": 2016.620, "end": 2022.860, "text": "you know and then things explode around\nit's because that trivial thing is an"}]
+    cues = [{"start": 2012.258, "end": 2016.380, "text": "a full two line cue of ordinary prose\nthat runs to the end of its second line"},
+            {"start": 2016.460, "end": 2016.540, "text": "another full two line cue squeezed flat\nbetween the one before and the one after"},
+            {"start": 2016.620, "end": 2022.860, "text": "and a third full two line cue that runs\non for a comfortable six seconds here"}]
     out = enforce_min_duration(cues, min_duration=0.8, min_gap=0.08)
     assert [c["text"] for c in out] == [c["text"] for c in cues]      # not one character rewritten
     assert all(c["end"] - c["start"] >= 0.8 - 1e-6 for c in out)
@@ -300,10 +300,10 @@ def _spoken(tokens, gaps=None, start=0.0, word_seconds=0.3, gap=0.05):
 
 def test_repair_sentence_starts_lowers_a_capital_nobody_paused_for():
     from utils.subtitle_utils import repair_sentence_starts
-    # Whisper starts every 30 s window as a fresh utterance: "a rebuke to A stale order"
-    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order", "and", "a", "stale", "idea"])
+    # Whisper starts every 30 s window as a fresh utterance: "we drove to A quiet village"
+    seg = _spoken(["we", "drove", "to", "A", "quiet", "village", "and", "a", "quiet", "road"])
     out = repair_sentence_starts([seg], 0.25)
-    assert out[0]["text"] == "a rebuke to a stale order and a stale idea"
+    assert out[0]["text"] == "we drove to a quiet village and a quiet road"
     assert out[0]["words"][3]["word"] == " a"          # the word list is kept in step with the text
 
 
@@ -317,44 +317,44 @@ def test_repair_sentence_starts_closes_a_sentence_the_speaker_finished():
 
 def test_repair_sentence_starts_never_invents_a_stop_after_a_weak_word():
     from utils.subtitle_utils import repair_sentence_starts
-    # the pause is real, but Whisper cuts its windows at silences - "a rebuke to. A stale order" is worse.
+    # the pause is real, but Whisper cuts its windows at silences - "we drove to. A quiet village" is worse.
     # No full stop is invented after "to"; the capital goes instead, because it has nothing in front of it.
-    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order", "or", "a", "stale", "idea"], gaps={3: 0.9})
-    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "a rebuke to a stale order or a stale idea"
+    seg = _spoken(["we", "drove", "to", "A", "quiet", "village", "or", "a", "quiet", "road"], gaps={3: 0.9})
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "we drove to a quiet village or a quiet road"
 
 
 def test_repair_sentence_starts_settles_a_capital_after_a_middling_pause():
     from utils.subtitle_utils import repair_sentence_starts
     # 0.35 s: too short to prove a sentence break, too long for the old rule to touch. The capital was left
     # standing with nothing in front of it - which is the error itself, not a safe middle way.
-    seg = _spoken(["in", "that", "order", "She's", "grateful", "for", "him", "and", "she's", "fine"],
+    seg = _spoken(["by", "the", "door", "She's", "waiting", "for", "him", "and", "she's", "fine"],
                   gaps={3: 0.35})
-    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "in that order she's grateful for him and she's fine"
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "by the door she's waiting for him and she's fine"
 
 
 def test_repair_sentence_starts_leaves_titles_and_name_runs_alone():
     from utils.subtitle_utils import repair_sentence_starts
     # every capital in a title has another capital beside it; a stray one has lower case on both sides
-    seg = _spoken(["called", "The", "Divinity", "of", "Interest", "and", "the", "divinity", "of", "it"],
+    seg = _spoken(["called", "The", "Long", "Way", "Home", "and", "the", "long", "way", "home"],
                   gaps={1: 0.35})
-    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "called The Divinity of Interest and the divinity of it"
-    run = _spoken(["about", "Snow", "White", "and", "the", "snow", "and", "the", "white", "dress"], gaps={1: 0.3})
-    assert repair_sentence_starts([run], 0.25)[0]["text"] == "about Snow White and the snow and the white dress"
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "called The Long Way Home and the long way home"
+    run = _spoken(["about", "Blue", "Harbour", "and", "the", "blue", "and", "the", "harbour", "road"], gaps={1: 0.3})
+    assert repair_sentence_starts([run], 0.25)[0]["text"] == "about Blue Harbour and the blue and the harbour road"
 
 
 def test_repair_sentence_starts_leaves_names_and_i_alone():
     from utils.subtitle_utils import repair_sentence_starts
-    seg = _spoken(["we", "asked", "Bismuth", "about", "it", "and", "I", "agreed"])
-    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "we asked Bismuth about it and I agreed"
+    seg = _spoken(["we", "asked", "Halloran", "about", "it", "and", "I", "agreed"])
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "we asked Halloran about it and I agreed"
     initials = _spoken(["signed", "by", "J.", "R.", "Smith", "yesterday"])
     assert repair_sentence_starts([initials], 0.25)[0]["text"] == "signed by J. R. Smith yesterday"
 
 
 def test_repair_sentence_starts_needs_word_timestamps():
     from utils.subtitle_utils import repair_sentence_starts
-    plain = [{"start": 0.0, "end": 3.0, "text": "a rebuke to A stale order"}]
+    plain = [{"start": 0.0, "end": 3.0, "text": "we drove to A quiet village"}]
     assert repair_sentence_starts(plain, 0.25) == plain      # nothing measured, nothing changed
-    mismatched = [{"start": 0.0, "end": 1.0, "text": "a rebuke to A stale order",
+    mismatched = [{"start": 0.0, "end": 1.0, "text": "we drove to A quiet village",
                    "words": [{"start": 0.0, "end": 1.0, "word": "something else entirely"}]}]
     assert repair_sentence_starts(mismatched, 0.25) == mismatched
 
@@ -419,21 +419,21 @@ def _paced(tokens, start=0.0, dur=0.3, gap=0.05, fast_first=0, fast_dur=0.09, fa
 
 def test_drop_repeated_text_removes_a_sentence_the_model_wrote_twice():
     from utils.subtitle_utils import drop_repeated_text
-    first = _paced("and the city was completely destroyed by the vows of hospitality".split())
-    second = _paced("But the city was completely destroyed by the vows of hospitality the person under "
-                    "your roof was under your protection".split(), start=first["end"] + 0.08, fast_first=11)
+    first = _paced("and the bridge was completely rebuilt after the floods of december".split())
+    second = _paced("But the bridge was completely rebuilt after the floods of december the road "
+                    "stayed closed until the spring came back".split(), start=first["end"] + 0.08, fast_first=11)
     out = drop_repeated_text([first, second])
     assert out[0]["text"] == first["text"]
-    assert out[1]["text"] == "the person under your roof was under your protection"
+    assert out[1]["text"] == "the road stayed closed until the spring came back"
     assert out[1]["start"] > second["start"]        # the cue now begins where its real words do
     assert out[1]["words"][0]["word"].strip() == "the"
 
 
 def test_drop_repeated_text_keeps_what_the_speaker_really_said_twice():
     from utils.subtitle_utils import drop_repeated_text
-    first = _paced("the inviolable vows of hospitality matter here".split())
-    for second in (_paced("the inviolable vows of hospitality matter here".split(), start=first["end"] + 0.1),
-                   _paced("the inviolable vows of hospitality matter here".split(), start=first["end"] + 0.1,
+    first = _paced("the ferry across the harbour matters here now".split())
+    for second in (_paced("the ferry across the harbour matters here now".split(), start=first["end"] + 0.1),
+                   _paced("the ferry across the harbour matters here now".split(), start=first["end"] + 0.1,
                           dur=0.22, gap=0.03)):        # said again, faster - still him
         out = drop_repeated_text([first, second])
         assert [s["text"] for s in out] == [first["text"], second["text"]]
@@ -441,32 +441,32 @@ def test_drop_repeated_text_keeps_what_the_speaker_really_said_twice():
 
 def test_drop_repeated_text_leaves_short_repetitions_alone():
     from utils.subtitle_utils import drop_repeated_text
-    # "that's, that's unsuccessful" is a stutter, not a re-emission: under the minimum length, untouched
-    first = _paced("that's unsuccessful right".split())
-    second = _paced("that's unsuccessful right that's chaos".split(), start=first["end"] + 0.06, fast_first=3)
+    # "it was, it was the same" is a stutter, not a re-emission: under the minimum length, untouched
+    first = _paced("it was the same".split())
+    second = _paced("it was the same thing again".split(), start=first["end"] + 0.06, fast_first=3)
     assert [s["text"] for s in drop_repeated_text([first, second])] == [first["text"], second["text"]]
 
 
 def test_drop_repeated_text_needs_the_words_to_spell_the_text():
     from utils.subtitle_utils import drop_repeated_text
-    first = _paced("and the city was completely destroyed by the vows of hospitality".split())
+    first = _paced("and the bridge was completely rebuilt after the floods of december".split())
     second = {"start": first["end"] + 0.1, "end": first["end"] + 3.0,
-              "text": "But the city was completely destroyed by the vows of hospitality and so on"}
+              "text": "But the bridge was completely rebuilt after the floods of december and so on"}
     assert drop_repeated_text([first, second]) == [first, second]
 
 
 def test_unify_word_case_gives_a_name_the_case_the_file_gives_it():
     from utils.subtitle_utils import unify_word_case
-    segments = [{"text": "the book Maps of Meaning ends with a chapter"},
-                {"text": "he read Maps of Meaning twice and said so"},
-                {"text": "it's like socrates and it's fine"},
-                {"text": "that's the proclamation and Socrates knew it"},
-                {"text": "when Socrates spoke of it he meant it"},
-                {"text": "i read the audio version of maps of meaning and recorded it"},
+    segments = [{"text": "the book Long Way Home ends with a chapter"},
+                {"text": "he read Long Way Home twice and said so"},
+                {"text": "it's like halloran and it's fine"},
+                {"text": "that's the proclamation and Halloran knew it"},
+                {"text": "when Halloran spoke of it he meant it"},
+                {"text": "i read the audio version of long way home and recorded it"},
                 {"text": "he will mark the rose and the will of the people"}]
     out = [s["text"] for s in unify_word_case(segments)]
-    assert out[2] == "it's like Socrates and it's fine"
-    assert out[5] == "I read the audio version of Maps of Meaning and recorded it"
+    assert out[2] == "it's like Halloran and it's fine"
+    assert out[5] == "I read the audio version of Long Way Home and recorded it"
     assert out[6] == "he will mark the rose and the will of the people"   # ordinary words are never touched
 
 
@@ -479,10 +479,10 @@ def test_unify_word_case_needs_more_than_one_sighting():
 
 def test_unify_word_case_keeps_the_words_in_step_with_the_text():
     from utils.subtitle_utils import unify_word_case
-    a = _spoken(["when", "Socrates", "spoke", "of", "Socrates", "he", "meant", "it"])
-    b = _spoken(["it's", "like", "socrates", "and", "i", "agree"], start=a["end"] + 0.2)
+    a = _spoken(["when", "Halloran", "spoke", "of", "Halloran", "he", "meant", "it"])
+    b = _spoken(["it's", "like", "halloran", "and", "i", "agree"], start=a["end"] + 0.2)
     out = unify_word_case([a, b])
-    assert out[1]["text"] == "it's like Socrates and I agree"
+    assert out[1]["text"] == "it's like Halloran and I agree"
     assert "".join(w["word"] for w in out[1]["words"]).strip() == out[1]["text"]
 
 

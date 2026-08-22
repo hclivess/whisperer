@@ -308,7 +308,7 @@ class _Worker(QThread):
                     # a sentence Whisper forgot to close or one it started at a window boundary
                     segments = repair_sentence_starts(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
                 if s.get("unify_word_case", True):
-                    # Whisper writes "Socrates" in one window and "socrates" in the next; nothing in the
+                    # Whisper writes "Halloran" in one window and "halloran" in the next; nothing in the
                     # audio decides which is right, so the rest of the file does
                     english = s.get("task") == "translate" or str(s.get("language", "en")).startswith("en")
                     segments = unify_word_case(segments, english=english)

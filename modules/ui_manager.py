@@ -537,10 +537,10 @@ class UIManager(QWidget):
         self.controls["initial_prompt"].setMaximumHeight(80)
         pl.addWidget(self.controls["initial_prompt"])
         self.controls["hotwords"] = QLineEdit()
-        self.controls["hotwords"].setPlaceholderText("Hotwords: mating game, Kučera, Hypernode")
+        self.controls["hotwords"].setPlaceholderText("Hotwords: names, jargon, product terms")
         self.controls["hotwords"].setToolTip(
             "Terms to weight the decoder towards, comma separated. Whisper decodes what it half hears into the "
-            "commoner word - \"mating game\" becomes \"marriage\" - and no amount of re-decoding fixes that, "
+            "commoner words - \"harvest fair\" becomes \"harbour fare\" - and no amount of re-decoding fixes that, "
             "because every pass hears the same audio the same way. Naming the words is the only thing that "
             "prevents it. Unlike the initial prompt these are not text the model may echo or imitate. The "
             "names the first pass settled on are added automatically for the later passes. faster-whisper only.")
@@ -724,7 +724,7 @@ class UIManager(QWidget):
         self.controls["repair_sentence_starts"].setChecked(True)
         self.controls["repair_sentence_starts"].setToolTip(
             "The other half of the same idea. Whisper decodes in 30 second windows and starts each one as if it "
-            "were a fresh utterance, so it writes capitals inside a phrase (\"a rebuke to A stale order\") and "
+            "were a fresh utterance, so it writes capitals inside a phrase (\"we drove to A quiet village\") and "
             "sometimes ends a window without the full stop the sentence needed. The pause below decides which "
             "happened: a real silence means the speaker did stop and the full stop is added, no silence means the "
             "capital is the window boundary and it goes back to lower case. Nothing is invented after a word a "
@@ -734,8 +734,8 @@ class UIManager(QWidget):
         self.controls["unify_word_case"] = QCheckBox("Give a name the case the rest of the file gives it")
         self.controls["unify_word_case"].setChecked(True)
         self.controls["unify_word_case"].setToolTip(
-            "Whisper is not consistent about names: the same lecture writes \"Socrates\" in one window and "
-            "\"socrates\" in the next, \"Maps of Meaning\" here and \"maps of meaning\" there. Nothing in the "
+            "Whisper is not consistent about names: the same lecture writes \"Halloran\" in one window and "
+            "\"halloran\" in the next, \"Long Way Home\" here and \"long way home\" there. Nothing in the "
             "audio decides it, so the rest of the file does - a word capitalised in most of its mid-sentence "
             "sightings is capitalised in the others too.\n\n"
             "A word the file mostly writes in lower case is left alone, which keeps ordinary words that happen "

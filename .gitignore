@@ -6,3 +6,4 @@ presets/*.json
 !presets/.gitkeep
 *.log
 .venv/
+temp/

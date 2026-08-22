@@ -35,7 +35,7 @@ TERRITORY = 2.0
 # Quality margin a rival decode must beat the first pass by before it may replace it on score alone.
 MARGIN = 0.25
 # Agreeing passes that still worded a cue differently below this are worth a line in the review list: a
-# meaning-changing mis-hearing ("mating game" heard as "marriage") is a partial disagreement, not a fight.
+# meaning-changing mis-hearing ("harvest fair" heard as "harbour fare") is a partial disagreement, not a fight.
 WORDING = 0.9
 # How much uglier than the text it would replace a reading may be before it is refused outright.
 JUNK_MARGIN = 0.3
@@ -134,7 +134,7 @@ def _junk(text: str) -> float:
     never catches it.
 
     What is deliberately NOT counted is anything that could be the speaker. Repeated words are speech:
-    people stutter, and "that's, that's unsuccessful, right" is often exactly what was said. Commas are
+    people stutter, and "it was, it was the same, thing" is often exactly what was said. Commas are
     speech too: a speaker who pauses that often has earned them. A transcript that keeps both is the
     correct one. The rendering is judged here, never the words.
     """
@@ -349,8 +349,8 @@ def _may_replace(pick: Dict, base: Dict, territory: Region) -> bool:
     Is this reading fit to stand in for the first pass's?
 
     It has to have heard the whole cue, and it must not be visibly worse text than the one it replaces. A
-    pass that has come apart can still win a vote or a score, and letting it hand over "He's, He's, The,
-    Light, Bringer," in place of a clean sentence is the worst thing this module can do.
+    pass that has come apart can still win a vote or a score, and letting it hand over "It's, It's, The,
+    Same, Road," in place of a clean sentence is the worst thing this module can do.
     """
     if not _seen_whole(pick, territory):
         return False

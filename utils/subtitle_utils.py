@@ -250,7 +250,7 @@ def _title_cased(words: List[str]) -> bool:
     Is this line Capitalised On Every Word?
 
     Such a stretch is a decode that came apart, not evidence about how the file writes a word - counting it
-    turned one "It's A Rebuke To Everything" into a licence to capitalise "rebuke" everywhere else.
+    turned one Title-Cased line into a licence to capitalise an ordinary word everywhere else.
     """
     real = [w for w in words if any(ch.isalnum() for ch in w)]
     if len(real) < 4:
@@ -259,7 +259,7 @@ def _title_cased(words: List[str]) -> bool:
 
 
 def _name_key(core: str) -> str:
-    """A word and its possessive are the same name: Elijah / Elijah's."""
+    """A word and its possessive are the same name: Halloran / Halloran's."""
     return _POSSESSIVE.sub("", core.lower())
 
 
@@ -267,7 +267,7 @@ def _case_profile(segments: List[Dict]) -> Dict[str, List[int]]:
     """
     How this transcript writes each word: [times capitalised, times in lower case], sentence starts aside.
 
-    Whisper is not consistent about names - the same lecture gives "Socrates" in one window and "socrates"
+    Whisper is not consistent about names - the same lecture gives "Halloran" in one window and "halloran"
     in the next - so which way a word goes is decided by the whole file rather than by any one sighting.
     Sentence-initial words are not counted at all: their capital says nothing about the word.
     """
@@ -316,7 +316,7 @@ def _word_stream(segments: List[Dict]) -> List[Optional[Tuple[int, int, Dict, bo
 _TRAILING_PUNCT = re.compile(r"""[,;:.!?…—–-]["'”’»)\]]*$""")
 # Words a sentence is not plausibly finished on, so no full stop is invented after them. Whisper cuts its
 # windows at silences, which is why a capital so often follows a real pause without the sentence having
-# ended - "a rebuke to [pause] A stale order" must not become "a rebuke to. A stale order". This is the
+# ended - "we drove to [pause] A quiet village" must not become "we drove to. A quiet village". This is the
 # mirror of the 1.3.7 rule and points the same way: when in doubt, leave the text alone.
 _WEAK_SENTENCE_END = {
     "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at", "for", "with", "from", "by", "as",
@@ -330,9 +330,9 @@ def _stands_alone(prev_token: str, nxt: Optional[Tuple[int, int, Dict, bool]]) -
     """
     Is this capital on its own in lower-case prose, or is it part of a run of them?
 
-    "the book Maps of Meaning ends with a chapter called The Divinity of Interest" is full of capitals that
+    "the book Long Way Home ends with a chapter called The Long Way Home" is full of capitals that
     belong to titles and names, and every one of them sits next to another capital. A capital with lower
-    case on both sides - "in that order She's grateful", "she serves them And they protect" - belongs to
+    case on both sides - "by the door She's waiting", "they packed the car And then they left" - belongs to
     nobody, and that is the only kind this lowers.
     """
     prev_core = prev_token.strip("\"'([{)]}").rstrip(",;:.!?…")
@@ -350,7 +350,7 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
     Settle every capital that has no full stop in front of it.
 
     Whisper decodes in 30 second windows and starts each one as if it were a fresh utterance, so it writes
-    capitals in the middle of a phrase - "a rebuke to A stale order" - and, the other way round, ends a
+    capitals in the middle of a phrase - "we drove to A quiet village" - and, the other way round, ends a
     window without the full stop the sentence needed. The word timestamps say which of the two happened:
     people pause between sentences and do not pause inside them.
 
@@ -358,7 +358,7 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
       anything else, when the capital stands alone in lower-case prose                -> lower-case it
 
     A capital with another capital beside it is left alone whatever the pause says: those are titles and
-    names - "a chapter called The Divinity of Interest" - and they are not this repair's business.
+    names - "a chapter called The Long Way Home" - and they are not this repair's business.
 
     There is no third outcome. A capital with nothing in front of it is an error either way, so leaving it
     standing on a pause too short to prove a sentence break only preserves the error - and lower case is
@@ -427,8 +427,8 @@ def drop_repeated_text(segments: List[Dict], min_words: int = 6, ratio: float = 
     Remove a run of words a cue repeats verbatim from the cue before it.
 
     After a window boundary Whisper sometimes writes the sentence it has just written again and then
-    carries on - "the city was destroyed by the vows of hospitality" / "But the city was destroyed by the
-    vows of hospitality the person under your roof was under your protection". The second copy is not
+    carries on - "the bridge was rebuilt after the floods of december" / "But the city was destroyed by the
+    floods of december the road stayed closed until the spring came back". The second copy is not
     speech: it sits on top of the words that were actually spoken there, which is why such a cue holds far
     more words than its span can hold.
 
@@ -438,7 +438,7 @@ def drop_repeated_text(segments: List[Dict], min_words: int = 6, ratio: float = 
     while a re-emission is squeezed into whatever room is left beside the words that were really spoken, so
     the copy is compared with the original by the clock: it is only removed when it runs at under max_speed
     of the time the same words took before. Together with a minimum length (short repetitions - "that's,
-    that's unsuccessful" - are him, not the model) and a near-verbatim match, that keeps the speaker's own
+    it was the same" - are him, not the model) and a near-verbatim match, that keeps the speaker's own
     repetitions, however fast he talks, and takes only the model's.
     """
     if not segments or min_words < 2:
@@ -484,8 +484,8 @@ def unify_word_case(segments: List[Dict], english: bool = True, majority: float 
     """
     Give a word the case this transcript mostly gives it.
 
-    Whisper is not consistent about names: the same lecture writes "Socrates" in one window and "socrates"
-    in the next, "Maps of Meaning" here and "maps of meaning" there. Nothing in the audio decides it - the
+    Whisper is not consistent about names: the same lecture writes "Halloran" in one window and "halloran"
+    in the next, "Long Way Home" here and "long way home" there. Nothing in the audio decides it - the
     rest of the file does. A word capitalised in most of its mid-sentence sightings is capitalised in the
     others too; a word the file mostly writes in lower case is left alone, which keeps ordinary words that
     happen to start a sentence somewhere ("will", "mark", "rose") out of it.

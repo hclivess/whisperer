@@ -85,10 +85,10 @@ def test_an_empty_second_pass_changes_nothing():
 
 
 def test_vocabulary_prompt_collects_repeated_names_only():
-    segments = [{"text": "we asked Bismuth about it."}, {"text": "Bismuth said the Hypernode was fine."},
-                {"text": "Later that day nothing happened."}, {"text": "the Hypernode came back up."}]
+    segments = [{"text": "we asked Halloran about it."}, {"text": "Halloran said the Northgate was fine."},
+                {"text": "Later that day nothing happened."}, {"text": "the Northgate came back up."}]
     prompt = vocabulary_prompt(segments)
-    assert "Bismuth" in prompt and "Hypernode" in prompt
+    assert "Halloran" in prompt and "Northgate" in prompt
     assert "Later" not in prompt                                 # a sentence start is not a name
     assert vocabulary_prompt(segments, "medical terms").startswith("medical terms ")
 
@@ -210,14 +210,14 @@ def test_a_windowed_pass_never_supplies_text_for_a_cue_it_only_half_heard():
 
 def test_review_lines_show_what_each_pass_said():
     from utils.verify_utils import resolve_passes, review_lines
-    first = [seg(0.0, 4.0, "the marriage is the whole point", avg_logprob=-1.4, compression_ratio=2.9)]
-    second = [seg(0.0, 4.0, "the mating game is the whole point", avg_logprob=-0.2)]
+    first = [seg(0.0, 4.0, "the harvest is the whole point", avg_logprob=-1.4, compression_ratio=2.9)]
+    second = [seg(0.0, 4.0, "the harbour fare is the whole point", avg_logprob=-0.2)]
     out, report, _ = resolve_passes([decode(first), decode(second)], [(0.0, 4.0)])
     text = "\n".join(review_lines(report, out, "talk.mkv"))
     assert "talk.mkv" in text
     assert "worded it differently" in text                     # close enough to agree, far enough to matter
-    assert "the marriage is the whole point" in text          # both readings are there to compare
-    assert "the mating game is the whole point" in text
+    assert "the harvest is the whole point" in text          # both readings are there to compare
+    assert "the harbour fare is the whole point" in text
     assert "00:00:00.000" in text
 
 
@@ -242,43 +242,43 @@ def test_a_decode_that_has_come_apart_never_replaces_clean_text():
     from utils.verify_utils import resolve_passes
     # the wreckage a prompt-imitating or over-sampled pass produces: Title Case, a comma after every word,
     # the same word twice. It can carry a fine avg_logprob, so only the text itself gives it away.
-    clean = [seg(0.0, 4.0, "and she was still referring to him as a baby", avg_logprob=-0.9)]
-    junk = [seg(0.0, 4.0, "And, She, Was, Still, Referring, To, Him, As, A, Baby,", avg_logprob=-0.05)]
+    clean = [seg(0.0, 4.0, "and so we moved it to the morning of june", avg_logprob=-0.9)]
+    junk = [seg(0.0, 4.0, "And, So, We, Moved, It, To, The, Morning, Of, June,", avg_logprob=-0.05)]
     out, report, _ = resolve_passes([decode(clean), decode(junk)], [(0.0, 4.0)])
-    assert out[0]["text"] == "and she was still referring to him as a baby"
+    assert out[0]["text"] == "and so we moved it to the morning of june"
     assert report["scored"] == 0
 
 
 def test_a_majority_of_degenerate_passes_still_does_not_win():
     from utils.verify_utils import resolve_passes
     # the speaker really does repeat himself here - what is wrong with the rival is the Title Case
-    clean = [seg(0.0, 4.0, "that's that's unsuccessful right that's that's chaos", avg_logprob=-0.9)]
-    junk1 = [seg(0.0, 4.0, "That's That's Unsuccessful Right That's That's Chaos", avg_logprob=-0.1)]
-    junk2 = [seg(0.0, 4.0, "That's That's Unsuccessful Right That's That's Chaos", avg_logprob=-0.1)]
+    clean = [seg(0.0, 4.0, "it was it was the same thing again", avg_logprob=-0.9)]
+    junk1 = [seg(0.0, 4.0, "It Was It Was The Same Thing Again", avg_logprob=-0.1)]
+    junk2 = [seg(0.0, 4.0, "It Was It Was The Same Thing Again", avg_logprob=-0.1)]
     out, report, _ = resolve_passes([decode(clean), decode(junk1), decode(junk2)], [(0.0, 4.0)])
-    assert out[0]["text"] == "that's that's unsuccessful right that's that's chaos"
+    assert out[0]["text"] == "it was it was the same thing again"
     assert report["majority"] == 0
 
 
 def test_a_clean_reading_still_replaces_a_degenerate_first_pass():
     from utils.verify_utils import resolve_passes
-    junk = [seg(0.0, 4.0, "He's, He's, The, Light, Bringer, He's, He's", avg_logprob=-0.9)]
-    clean = [seg(0.0, 4.0, "he's he's the light bringer he's he's", avg_logprob=-0.2)]
+    junk = [seg(0.0, 4.0, "It's, It's, The, Same, Road, It's, It's", avg_logprob=-0.9)]
+    clean = [seg(0.0, 4.0, "it's it's the same road it's it's", avg_logprob=-0.2)]
     out, report, _ = resolve_passes([decode(junk), decode(clean)], [(0.0, 4.0)])
-    assert out[0]["text"] == "he's he's the light bringer he's he's"   # the stutter is his, keep it
+    assert out[0]["text"] == "it's it's the same road it's it's"   # the stutter is his, keep it
     assert report["cleaned"] + report["scored"] == 1
 
 
 def test_junk_score_judges_the_rendering_and_never_the_words():
     from utils.verify_utils import _junk
-    assert _junk("and she was still referring to him as a baby") == 0.0
+    assert _junk("and so we moved it to the morning of june") == 0.0
     assert _junk("Well, that's something living, right? A fully formed entity") == 0.0
-    assert _junk("And, She, Was, Still, Referring, To, Him, As, A, Baby,") > 0.9
-    assert _junk("That's That's Unsuccessful Right That's That's Chaos") > 0.3   # Title Case, not the words
+    assert _junk("And, So, We, Moved, It, To, The, Morning, Of, June,") > 0.9
+    assert _junk("It Was It Was The Same Thing Again") > 0.3   # Title Case, not the words
     # people stutter, and people pause: both belong to the speaker, neither is a defect
-    assert _junk("that's, that's unsuccessful, right, that's chaos, that's chaos") == 0.0
+    assert _junk("it was, it was the same, thing, it was the same, thing") == 0.0
     assert _junk("it's it's a it's it's a fully formed entity") == 0.0
-    assert _junk("and, she, was, still, referring, to, him, as, a, baby,") == 0.0
+    assert _junk("and, so, we, moved, it, to, the, morning, of, june,") == 0.0
 
 
 def test_a_replaced_cue_does_not_repeat_contractions():

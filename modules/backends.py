@@ -145,7 +145,7 @@ def transcribe_faster_whisper(audio_path: str, settings: Dict, cb: TranscribeCal
         kwargs["initial_prompt"] = settings["initial_prompt"]
     if settings.get("hotwords"):
         # terms to weight the decoder towards, without a prompt's side effects: this is what stops
-        # "mating game" being decoded as the commoner word it half sounds like
+        # "harvest fair" being decoded as the commoner words it half sounds like
         kwargs["hotwords"] = settings["hotwords"]
     if settings.get("temperature") is not None:
         # a verification pass has to be an independent draw: at temperature 0 the same settings give the
