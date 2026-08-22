@@ -512,6 +512,14 @@ class UIManager(QWidget):
                                                                "but can get stuck repeating on bad audio")
         self.controls["condition_on_previous_text"].setChecked(True)
         grid.addWidget(self.controls["condition_on_previous_text"], 4, 0, 1, 2)
+        self.controls["second_pass"] = QCheckBox("Second pass: transcribe twice and keep what both agree on")
+        self.controls["second_pass"].setChecked(True)
+        self.controls["second_pass"].setToolTip(
+            "Whisper invents differently every time it is asked, but real speech comes back the same, so a "
+            "second decode is evidence about the first. Cues both passes produce are kept, a cue the second "
+            "pass heard nothing under (and the VAD finds no speech in) is dropped as hallucinated, and speech "
+            "the first pass skipped is recovered. Timing is never touched. Costs one more decode of the file.")
+        grid.addWidget(self.controls["second_pass"], 5, 0, 1, 2)
         dec_group.setLayout(grid)
         layout.addWidget(dec_group)
 
@@ -1131,6 +1139,7 @@ class UIManager(QWidget):
             "beam_size": c["beam_size"].value(),
             "word_timestamps": c["word_timestamps"].isChecked(),
             "condition_on_previous_text": c["condition_on_previous_text"].isChecked(),
+            "second_pass": c["second_pass"].isChecked(),
             "initial_prompt": c["initial_prompt"].toPlainText().strip(),
             "extra_args": c["extra_args"].text().strip(),
             "sync_mode": c["sync_mode"].currentData(),

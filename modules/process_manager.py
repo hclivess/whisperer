@@ -18,6 +18,7 @@ from utils.subtitle_utils import (capitalize_sentences, enforce_min_duration, me
                                   write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
+from utils.verify_utils import verify_second_pass, vocabulary_prompt
 
 try:
     import psutil
@@ -175,12 +176,15 @@ class _Worker(QThread):
             self.file_state.emit(index, "processing", "")
             seg_count = [0]
             t0 = time.time()
+            second_pass = bool(s.get("second_pass", True)) and s.get("sync_mode") != "resync"
+            phase = [0]                       # which decode we are in, when the file is transcribed twice
+            phases = 2 if second_pass else 1
 
             def on_progress(done, total):
                 total_len = total or qf.duration or 0
                 if total_len:
                     frac = min(1.0, max(0.0, done / total_len))
-                    self.file_progress.emit(int(frac * 1000))
+                    self.file_progress.emit(int((phase[0] + frac) / phases * 1000))
                 elapsed = time.time() - t0
                 speed = done / elapsed if elapsed > 0 else 0
                 remaining = (total_len - done) / speed if speed > 0 and total_len else None
@@ -193,6 +197,8 @@ class _Worker(QThread):
                 self._emit_overall(index, done, total_len)
 
             def on_segment(seg):
+                if phase[0]:                  # the second decode is evidence, not a transcript to show
+                    return
                 seg_count[0] += 1
                 self.segment.emit(index, seg)
 
@@ -201,11 +207,35 @@ class _Worker(QThread):
                 should_stop=self._stop.is_set, wait_if_paused=self._wait_if_paused,
                 set_process=self._set_process, extra={"duration": qf.duration})
             engine_settings = dict(s)
-            if s.get("snap_to_speech") or s.get("sync_mode") == "resync" or s.get("repair_sentence_breaks"):
+            if (s.get("snap_to_speech") or s.get("sync_mode") == "resync" or s.get("repair_sentence_breaks")
+                    or second_pass):
                 engine_settings["word_timestamps"] = True      # word-level alignment is what we snap / match
             segments, meta = BACKENDS[engine](audio_for_engine, engine_settings, cb)
             if self._stop.is_set():
                 raise StoppedError()
+
+            regions = None
+            if second_pass and segments:
+                # A second, independent decode of the same audio: no context carried over (a repetition loop
+                # cannot feed itself twice), a different beam, and the names the first pass settled on handed
+                # back as the prompt. What both passes produce is trusted; what only one produced is decided
+                # by whether the VAD heard anything there.
+                phase[0] = 1
+                self.status.emit(f"Second pass (verifying the transcript): {qf.name}")
+                second_settings = dict(engine_settings)
+                second_settings["condition_on_previous_text"] = False
+                second_settings["beam_size"] = 1 if int(s.get("beam_size", 5)) > 1 else 5
+                second_settings["initial_prompt"] = vocabulary_prompt(segments, s.get("initial_prompt", ""))
+                second, _second_meta = BACKENDS[engine](audio_for_engine, second_settings, cb)
+                if self._stop.is_set():
+                    raise StoppedError()
+                self.status.emit("Comparing the two passes…")
+                regions = speech_regions(audio_for_engine)
+                segments, report = verify_second_pass(segments, second, regions)
+                meta["second_pass"] = report
+                self.status.emit(
+                    f"Second pass: {report['confirmed']} cue(s) confirmed, {report['replaced']} corrected, "
+                    f"{report['dropped']} dropped as hallucinated, {report['added']} recovered")
 
             if s.get("sync_mode") == "resync":
                 sub_path = self._resync_source(src, s)
@@ -227,7 +257,8 @@ class _Worker(QThread):
 
             if s.get("snap_to_speech"):
                 self.status.emit(f"Snapping cues to speech: {qf.name}")
-                regions = speech_regions(audio_for_engine)
+                if regions is None:
+                    regions = speech_regions(audio_for_engine)
                 if self._stop.is_set():
                     raise StoppedError()
                 segments = snap_to_speech(
