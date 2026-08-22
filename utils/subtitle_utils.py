@@ -292,6 +292,24 @@ _WEAK_SENTENCE_END = {
 }
 
 
+def _stands_alone(prev_token: str, nxt: Optional[Tuple[int, int, Dict, bool]]) -> bool:
+    """
+    Is this capital on its own in lower-case prose, or is it part of a run of them?
+
+    "the book Maps of Meaning ends with a chapter called The Divinity of Interest" is full of capitals that
+    belong to titles and names, and every one of them sits next to another capital. A capital with lower
+    case on both sides - "in that order She's grateful", "she serves them And they protect" - belongs to
+    nobody, and that is the only kind this lowers.
+    """
+    prev_core = prev_token.strip("\"'([{)]}").rstrip(",;:.!?…")
+    if prev_core[:1].isupper():
+        return False
+    if nxt is None:
+        return True
+    next_core = nxt[2]["word"].strip().strip("\"'([{)]}").rstrip(",;:.!?…")
+    return not next_core[:1].isupper()
+
+
 def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
                            sentence_pause: float = 0.0) -> List[Dict]:
     """
@@ -302,9 +320,15 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
     window without the full stop the sentence needed. The word timestamps say which of the two happened:
     people pause between sentences and do not pause inside them.
 
-      pause >= sentence_pause : the speaker did stop, Whisper only forgot the full stop -> add it
-      pause <  min_pause      : nobody stopped, the capital is the window boundary -> lower-case it
-      anything in between     : left exactly as it is
+      the speaker did stop (a long enough pause, after a word a sentence can end on) -> add the full stop
+      anything else, when the capital stands alone in lower-case prose                -> lower-case it
+
+    A capital with another capital beside it is left alone whatever the pause says: those are titles and
+    names - "a chapter called The Divinity of Interest" - and they are not this repair's business.
+
+    There is no third outcome. A capital with nothing in front of it is an error either way, so leaving it
+    standing on a pause too short to prove a sentence break only preserves the error - and lower case is
+    what the surrounding prose reads as.
 
     Adding is held to a higher standard than lowering, because Whisper cuts its windows at silences: a
     capital after a real pause is ambiguous, so no full stop is invented after a word a sentence does not
@@ -343,14 +367,14 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
         if _SENTENCE_END.search(prev_token):
             continue                                   # the sentence is already closed: nothing to settle
         pause = float(word["start"]) - float(prev["end"])
-        if pause >= sentence_pause:
-            prev_core = prev_token.strip("\"'([{)]}").lower()
-            if (not prev_editable or _TRAILING_PUNCT.search(prev_token)
-                    or prev_core in _WEAK_SENTENCE_END or len(prev_core) < 2):
-                continue                               # no full stop over a comma or after "to", "the", "and"
+        prev_core = prev_token.strip("\"'([{)]}").lower()
+        # no full stop over a comma, or after "to" / "the" / "and", which a sentence does not end on
+        can_close = (prev_editable and not _TRAILING_PUNCT.search(prev_token)
+                     and prev_core not in _WEAK_SENTENCE_END and len(prev_core) >= 2)
+        if pause >= sentence_pause and can_close:
             out[prev_seg_i]["words"][prev_k]["word"] = prev["word"].rstrip() + "."
             changed.add(prev_seg_i)
-        elif pause < min_pause and editable:
+        elif editable and _stands_alone(prev_token, stream[n + 1] if n + 1 < len(stream) else None):
             i = token.index(core[0])
             out[seg_i]["words"][k]["word"] = word["word"].replace(token, token[:i] + core[0].lower() + token[i + 1:], 1)
             changed.add(seg_i)

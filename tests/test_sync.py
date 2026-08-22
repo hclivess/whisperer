@@ -317,9 +317,29 @@ def test_repair_sentence_starts_closes_a_sentence_the_speaker_finished():
 
 def test_repair_sentence_starts_never_invents_a_stop_after_a_weak_word():
     from utils.subtitle_utils import repair_sentence_starts
-    # the pause is real, but Whisper cuts its windows at silences - "a rebuke to. A stale order" is worse
+    # the pause is real, but Whisper cuts its windows at silences - "a rebuke to. A stale order" is worse.
+    # No full stop is invented after "to"; the capital goes instead, because it has nothing in front of it.
     seg = _spoken(["a", "rebuke", "to", "A", "stale", "order", "or", "a", "stale", "idea"], gaps={3: 0.9})
-    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "a rebuke to A stale order or a stale idea"
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "a rebuke to a stale order or a stale idea"
+
+
+def test_repair_sentence_starts_settles_a_capital_after_a_middling_pause():
+    from utils.subtitle_utils import repair_sentence_starts
+    # 0.35 s: too short to prove a sentence break, too long for the old rule to touch. The capital was left
+    # standing with nothing in front of it - which is the error itself, not a safe middle way.
+    seg = _spoken(["in", "that", "order", "She's", "grateful", "for", "him", "and", "she's", "fine"],
+                  gaps={3: 0.35})
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "in that order she's grateful for him and she's fine"
+
+
+def test_repair_sentence_starts_leaves_titles_and_name_runs_alone():
+    from utils.subtitle_utils import repair_sentence_starts
+    # every capital in a title has another capital beside it; a stray one has lower case on both sides
+    seg = _spoken(["called", "The", "Divinity", "of", "Interest", "and", "the", "divinity", "of", "it"],
+                  gaps={1: 0.35})
+    assert repair_sentence_starts([seg], 0.25)[0]["text"] == "called The Divinity of Interest and the divinity of it"
+    run = _spoken(["about", "Snow", "White", "and", "the", "snow", "and", "the", "white", "dress"], gaps={1: 0.3})
+    assert repair_sentence_starts([run], 0.25)[0]["text"] == "about Snow White and the snow and the white dress"
 
 
 def test_repair_sentence_starts_leaves_names_and_i_alone():
