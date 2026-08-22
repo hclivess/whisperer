@@ -592,6 +592,10 @@ class UIManager(QWidget):
         self.controls["min_cue_ms"].setSingleStep(100)
         self.controls["min_cue_ms"].setSuffix(" ms")
         self.controls["min_cue_ms"].setValue(800)
+        self.controls["min_cue_ms"].setToolTip(
+            "No cue is written shorter than this while a neighbour still has time to spare - it is stretched "
+            "into the free time around it and, failing that, borrows the rest from the cue before or after it. "
+            "Applies in every mode, resync included, and needs no text to be rewritten.")
         grid.addWidget(QLabel("Min cue duration:"), 3, 0)
         grid.addWidget(self.controls["min_cue_ms"], 3, 1)
         self.controls["merge_short_cues"] = QCheckBox("Merge cues that stay too short into their neighbour")
@@ -600,7 +604,8 @@ class UIManager(QWidget):
             "A cue that cannot reach the minimum duration in the free time around it is glued to the cue next to "
             "it instead of being extended over the next line's speech - Whisper emits segments as short as 10 ms, "
             "which flash on screen unreadably. Merging is skipped when the joined text would not fit the cue "
-            "layout, would run past the maximum cue duration, or the two cues are far apart.")
+            "layout, would run past the maximum cue duration, or the two cues are far apart - a cue that can "
+            "be neither stretched nor merged borrows the missing time from a neighbour that has it to spare.")
         grid.addWidget(self.controls["merge_short_cues"], 4, 0, 1, 2)
         self.controls["min_gap_ms"] = QSpinBox()
         self.controls["min_gap_ms"].setRange(0, 1000)

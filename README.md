@@ -99,7 +99,7 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 |---|---|
 | Cue appears before the line is spoken / stays on after it | **Snap cues to detected speech** (Sync tab, on by default): every cue start/end is moved onto the nearest speech onset/offset within *Max shift* (600 ms), cues that run over silence are cut, then *Hold after speech* (200 ms), *Min cue duration* and *Min gap* are applied. Word timestamps are used automatically. |
 | A sentence is cut in half and a new one starts mid-phrase | **Remove full stops the speaker never made** (Subtitles tab, on by default): Whisper punctuates by language model, not by ear, and regularly ends a sentence inside a phrase — *"When someone is. First about to embark on a minor task"*. People pause between sentences, so a full stop with less than *Shortest pause between sentences* (250 ms) of silence around it is the model's invention: it is removed and the next word goes back to lower case. Names (seen capitalised mid-sentence elsewhere) and *I* keep their capital; abbreviations, initials, decimals and `...` are never touched. Without word timestamps almost nothing is repaired — only `a.` / `an.` / `the.`, which cannot end an English sentence under any reading. |
-| A cue flashes on screen for a fraction of a second | **Merge cues that stay too short into their neighbour** (Sync tab, on by default): Whisper emits segments as short as 10 ms, and a cue squeezed against the next one cannot reach *Min cue duration* on its own. Such a cue is first stretched into the free time after it and, if there is none, glued to the cue beside it — two short lines shown together read fine, a line held over the next one's speech does not. Merging is skipped when the joined text would not fit the cue layout, would run past *Max cue duration*, or the two cues are over 1.5 s apart. |
+| A cue flashes on screen for a fraction of a second | **Merge cues that stay too short into their neighbour** (Sync tab, on by default): Whisper emits segments as short as 10 ms, and a cue squeezed against the next one cannot reach *Min cue duration* on its own. Such a cue is first stretched into the free time after it and, if there is none, glued to the cue beside it — two short lines shown together read fine, a line held over the next one's speech does not. Merging is skipped when the joined text would not fit the cue layout, would run past *Max cue duration*, or the two cues are over 1.5 s apart; a cue that can be neither stretched nor merged then borrows the missing time from whichever neighbour has time to spare, so it still reaches *Min cue duration*. That last step is timing only and runs in every mode, so a **resynced** subtitle — where cues are never merged, because the text is not ours to rewrite — is covered too. |
 | Everything early by a constant amount | Audio streams with a non-zero start time are now extracted in place (`aresample=first_pts=0`), and timestamp gaps are filled with silence so nothing drifts over dropped packets. If you still want a nudge: **Global offset**. |
 | Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
 
@@ -135,6 +135,19 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.3.8
+
+- **Min cue duration is now a real floor, in every mode.** It is applied one last time just before the file
+  is written, as timing only: a cue that is too short is stretched into the free time around it and, if there
+  is none, borrows the rest from a neighbour that stays above the minimum itself. This is what a *resynced*
+  subtitle was missing entirely — merging is not allowed to rewrite an imported file, so snapping could leave
+  a full two-line cue on screen for 80 ms and nothing downstream ever fixed it.
+- **A cue can no longer stay unreadably short.** A full-length line squeezed between two other full-length
+  lines had no way out: there was no free time around it, and no merge could fit the two texts inside the cue
+  layout, so it was written out as it was — an 80 ms flash of a full sentence. Such a cue now borrows the
+  missing time from a neighbour that has it to spare (from the earlier one first, so the next line still
+  comes up with its own speech), and a donor never drops below *Min cue duration* itself.
 
 ## Changes in 1.3.7
 
