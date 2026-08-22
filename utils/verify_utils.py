@@ -111,6 +111,20 @@ def _covers(decode: Dict, start: float, end: float) -> bool:
     return any(min(end, c_end) - max(start, c_start) > 0.1 for c_start, c_end in covers)
 
 
+def _fully_seen(decode: Dict, start: float, end: float) -> bool:
+    """
+    Did this decode hear the whole stretch, or only part of it?
+
+    A pass aimed at a few windows has hard edges: a cue lying across one of them was decoded up to the cut
+    and no further. Such a decode may still vote on the cue - it heard most of it - but its text must never
+    replace the cue's, because the words past the cut were never transcribed and would be lost.
+    """
+    covers = decode.get("covers")
+    if not covers:
+        return True
+    return any(c_start <= start and end <= c_end for c_start, c_end in covers)
+
+
 def _text_of(words: Sequence[Dict]) -> str:
     return " ".join(w["word"].strip() for w in words if w["word"].strip()).strip()
 
@@ -224,7 +238,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 out.append(seg)
                 continue
             pick = max(winners, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start))
-            replaced = _replace(seg, pick, territories[index])
+            replaced = _replace(seg, pick, territories[index]) if _seen_whole(pick, territories[index]) else None
             if replaced is not None:
                 report["majority"] += 1
                 out.append(replaced)
@@ -239,8 +253,8 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
         rivals = [c for c in candidates if not c["base"]]
         pick = max(rivals, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start),
                    default=None)
-        if pick is not None and _quality(pick["seg"], speech, len(pick["tokens"]),
-                                         end - start) > base_score + margin:
+        if (pick is not None and _seen_whole(pick, territories[index])
+                and _quality(pick["seg"], speech, len(pick["tokens"]), end - start) > base_score + margin):
             replaced = _replace(seg, pick, territories[index])
             if replaced is not None:
                 report["scored"] += 1
@@ -253,6 +267,11 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
         report["added"] = len(added)
         out = sorted(out + added, key=lambda s: float(s["start"]))
     return out, report, unresolved
+
+
+def _seen_whole(pick: Dict, territory: Region) -> bool:
+    """May this candidate's text stand in for the cue? Only if its pass heard the cue's whole territory."""
+    return not pick.get("pass") or _fully_seen(pick["pass"]["decode"], *territory)
 
 
 def _replace(seg: Dict, pick: Dict, territory: Region) -> Optional[Dict]:
