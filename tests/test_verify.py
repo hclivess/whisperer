@@ -206,3 +206,33 @@ def test_a_windowed_pass_never_supplies_text_for_a_cue_it_only_half_heard():
     out, report, _ = resolve_passes([decode(first), decode(second), third], [(28.0, 32.0)])
     assert out[0]["text"] == "Ying and Yang and the whole of it"
     assert report["dropped"] == 0
+
+
+def test_review_lines_show_what_each_pass_said():
+    from utils.verify_utils import resolve_passes, review_lines
+    first = [seg(0.0, 4.0, "the marriage is the whole point", avg_logprob=-1.4, compression_ratio=2.9)]
+    second = [seg(0.0, 4.0, "the mating game is the whole point", avg_logprob=-0.2)]
+    out, report, _ = resolve_passes([decode(first), decode(second)], [(0.0, 4.0)])
+    text = "\n".join(review_lines(report, out, "talk.mkv"))
+    assert "talk.mkv" in text
+    assert "worded it differently" in text                     # close enough to agree, far enough to matter
+    assert "the marriage is the whole point" in text          # both readings are there to compare
+    assert "the mating game is the whole point" in text
+    assert "00:00:00.000" in text
+
+
+def test_review_lines_say_so_when_there_is_nothing_to_review():
+    from utils.verify_utils import resolve_passes, review_lines
+    same = [seg(0.0, 4.0, "one two three four", avg_logprob=-0.2)]
+    out, report, _ = resolve_passes([decode(same), decode([seg(0.0, 4.0, "one two three four")])], [(0.0, 4.0)])
+    text = "\n".join(review_lines(report, out))
+    assert "Every cue was agreed on" in text
+
+
+def test_low_confidence_cues_are_listed_for_a_human():
+    from utils.verify_utils import review_lines
+    report = {"passes": 3, "checked": 2, "confirmed": 2, "review": []}
+    segments = [seg(0.0, 2.0, "clear as day", avg_logprob=-0.2),
+                seg(2.0, 4.0, "mumbled through a scarf", avg_logprob=-1.3)]
+    text = "\n".join(review_lines(report, segments))
+    assert "mumbled through a scarf" in text and "clear as day" not in text

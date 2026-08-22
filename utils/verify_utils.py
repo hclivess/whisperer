@@ -34,6 +34,9 @@ SILENT_SECONDS = 0.3
 TERRITORY = 2.0
 # Quality margin a rival decode must beat the first pass by before it may replace it on score alone.
 MARGIN = 0.25
+# Agreeing passes that still worded a cue differently below this are worth a line in the review list: a
+# meaning-changing mis-hearing ("mating game" heard as "marriage") is a partial disagreement, not a fight.
+WORDING = 0.9
 
 
 def _words(segments: Sequence[Dict]) -> List[Dict]:
@@ -184,7 +187,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
     on them - the score decides them meanwhile, and they are counted as unresolved either way.
     """
     report = {"passes": len(decodes), "checked": 0, "confirmed": 0, "majority": 0, "scored": 0,
-              "dropped": 0, "added": 0, "unresolved": 0, "removed": []}
+              "dropped": 0, "added": 0, "unresolved": 0, "removed": [], "review": []}
     if not decodes or not decodes[0].get("segments"):
         return (decodes[0].get("segments") if decodes else []), report, []
     first = decodes[0]["segments"]
@@ -208,7 +211,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
         report["checked"] += 1
 
         candidates = [{"tokens": _tokens(seg.get("text", "")), "seg": seg, "words": None,
-                       "pass": None, "base": True}]
+                       "pass": None, "base": True, "text": seg.get("text", "")}]
         empty_votes = 0
         for p in voters:
             words = _in_span(p["words"], start, end)
@@ -216,7 +219,10 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 empty_votes += 1
                 continue
             candidates.append({"tokens": [w["tok"] for w in words], "words": words, "base": False,
-                               "seg": _nearest_segment(p["segments"], start, end), "pass": p})
+                               "seg": _nearest_segment(p["segments"], start, end), "pass": p,
+                               # compared on the padded span, but shown as what belongs to this cue: a
+                               # review line must not seem to hold a word from the cue next door
+                               "text": _text_of(_inside(p["words"], *territories[index]))})
         if speech is not None and speech < SILENT_FRACTION and speech * (end - start) < SILENT_SECONDS:
             empty_votes += 1                      # the VAD gets a vote, and it can only vote for silence
 
@@ -229,18 +235,29 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             if len(report["removed"]) < 20:
                 report["removed"].append({"start": round(start, 2), "end": round(end, 2),
                                           "text": seg.get("text", "")[:120]})
+            _note(report, start, end, "dropped: nothing was heard here", "", candidates)
             continue
 
         if best >= 2:
             winners = [c for c, v in zip(candidates, votes) if v + 1 == best]
             if any(c["base"] for c in winners):
                 report["confirmed"] += 1          # the first pass is in the majority: keep it word for word
+                # the furthest reading, not the nearest: one pass hearing something else entirely is the
+                # interesting part, even when the others agree and the cue is settled
+                furthest = min((difflib.SequenceMatcher(None, candidates[0]["tokens"], c["tokens"],
+                                                        autojunk=False).ratio()
+                                for c in candidates[1:] if _seen_whole(c, territories[index])), default=1.0)
+                if furthest < WORDING:
+                    _note(report, start, end, "the passes agreed but worded it differently",
+                          seg.get("text", ""), candidates)
                 out.append(seg)
                 continue
             pick = max(winners, key=lambda c: _quality(c["seg"], speech, len(c["tokens"]), end - start))
             replaced = _replace(seg, pick, territories[index]) if _seen_whole(pick, territories[index]) else None
             if replaced is not None:
                 report["majority"] += 1
+                _note(report, start, end, "the other passes agreed against the first one",
+                      replaced["text"], candidates)
                 out.append(replaced)
                 continue
             out.append(seg)
@@ -258,8 +275,12 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             replaced = _replace(seg, pick, territories[index])
             if replaced is not None:
                 report["scored"] += 1
+                _note(report, start, end, "no two passes agreed - picked on confidence",
+                      replaced["text"], candidates)
                 out.append(replaced)
                 continue
+        _note(report, start, end, "no two passes agreed - the first pass was kept",
+              seg.get("text", ""), candidates)
         out.append(seg)
 
     added = _missed_spans(out, prepared, regions, min_speech)
@@ -272,6 +293,16 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
 def _seen_whole(pick: Dict, territory: Region) -> bool:
     """May this candidate's text stand in for the cue? Only if its pass heard the cue's whole territory."""
     return not pick.get("pass") or _fully_seen(pick["pass"]["decode"], *territory)
+
+
+def _note(report: Dict, start: float, end: float, why: str, chosen: str, candidates: List[Dict]) -> None:
+    """One line for the review list: where the passes did not simply agree, and what each of them said."""
+    if len(report["review"]) >= 500:
+        return
+    report["review"].append({
+        "start": round(start, 2), "end": round(end, 2), "why": why, "chosen": chosen,
+        "said": [c.get("text", "") for c in candidates],
+    })
 
 
 def _replace(seg: Dict, pick: Dict, territory: Region) -> Optional[Dict]:
@@ -384,3 +415,40 @@ def vocabulary_prompt(segments: Sequence[Dict], base: str = "", limit: int = 30,
     if len(listing) > max_chars:
         listing = listing[:max_chars].rsplit(",", 1)[0]
     return f"{base.strip()} {listing}".strip() if base.strip() else listing
+
+
+def review_lines(report: Dict, segments: Sequence[Dict], source: str = "",
+                 low_confidence: float = -0.9) -> List[str]:
+    """
+    The places worth a human eye: where the passes disagreed, and where the decoder was least sure.
+
+    A consistent mis-hearing - every pass confidently saying the same wrong word - cannot be caught by
+    agreement, which is exactly why this list exists rather than another automatic repair.
+    """
+    lines = [f"whisperer review list{' - ' + source if source else ''}",
+             f"{report.get('passes', 1)} passes over {report.get('checked', 0)} cue(s): "
+             f"{report.get('confirmed', 0)} agreed, {report.get('majority', 0)} settled by majority, "
+             f"{report.get('scored', 0)} picked on confidence, {report.get('dropped', 0)} dropped, "
+             f"{report.get('added', 0)} recovered, {report.get('unresolved', 0)} left unresolved", ""]
+    for item in report.get("review", []):
+        lines.append(f"{_timecode(item['start'])} - {_timecode(item['end'])}  {item['why']}")
+        if item.get("chosen"):
+            lines.append(f"    kept  : {item['chosen']}")
+        for n, said in enumerate(item.get("said", []), 1):
+            lines.append(f"    pass {n}: {said or '(nothing)'}")
+        lines.append("")
+    weak = [s for s in segments if float(s.get("avg_logprob", 0.0)) < low_confidence]
+    if weak:
+        lines.append(f"Cues the decoder was least sure of (avg_logprob under {low_confidence}):")
+        for s in weak[:200]:
+            lines.append(f"{_timecode(float(s['start']))}  {float(s.get('avg_logprob', 0)):.2f}  "
+                         f"{s.get('text', '')}")
+        lines.append("")
+    if len(lines) == 3:
+        lines.append("Every cue was agreed on by at least two passes, and no cue was flagged as weak.")
+    return lines
+
+
+def _timecode(t: float) -> str:
+    t = max(0.0, t)
+    return f"{int(t // 3600):02d}:{int(t // 60) % 60:02d}:{t % 60:06.3f}"

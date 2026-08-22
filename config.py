@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -73,6 +73,7 @@ DEFAULT_SETTINGS = {
     "condition_on_previous_text": True,
     "passes": 3,                    # decode the file this many times and keep what the decodes agree on
     "initial_prompt": "",
+    "hotwords": "",                 # terms to weight decoding towards (faster-whisper)
     "extra_args": "",
     # Sync
     "sync_mode": "generate",        # generate | resync
@@ -95,6 +96,7 @@ DEFAULT_SETTINGS = {
     "repair_sentence_starts": True,
     "sentence_pause_ms": 250,
     "strip_foreign_script": True,
+    "review_list": False,           # write <name>.review.txt: where the passes disagreed
     "output_mode": "same",          # same | custom
     "output_dir": "",
     "suffix": "",
