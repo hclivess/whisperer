@@ -3,6 +3,7 @@ Subtitle post-processing and writers.
 
 A Segment is a plain dict: {"start": float, "end": float, "text": str, "words": [ {start,end,word}, ... ]}
 """
+import difflib
 import json
 import os
 import re
@@ -357,6 +358,65 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
     for i in changed:
         out[i]["text"] = _clean("".join(w["word"] for w in out[i]["words"]))
     return out
+
+def _plain(word: str) -> str:
+    return word.strip().strip("\"'([{)]}").rstrip(",;:.!?…").lower()
+
+
+def drop_repeated_text(segments: List[Dict], min_words: int = 6, ratio: float = 0.85,
+                       max_speed: float = 0.6) -> List[Dict]:
+    """
+    Remove a run of words a cue repeats verbatim from the cue before it.
+
+    After a window boundary Whisper sometimes writes the sentence it has just written again and then
+    carries on - "the city was destroyed by the vows of hospitality" / "But the city was destroyed by the
+    vows of hospitality the person under your roof was under your protection". The second copy is not
+    speech: it sits on top of the words that were actually spoken there, which is why such a cue holds far
+    more words than its span can hold.
+
+    Only the repeated run is removed, never the cue: what follows it is the real continuation.
+
+    A speaker repeating himself is not this. Saying a phrase twice takes roughly the same time both times,
+    while a re-emission is squeezed into whatever room is left beside the words that were really spoken, so
+    the copy is compared with the original by the clock: it is only removed when it runs at under max_speed
+    of the time the same words took before. Together with a minimum length (short repetitions - "that's,
+    that's unsuccessful" - are him, not the model) and a near-verbatim match, that keeps the speaker's own
+    repetitions, however fast he talks, and takes only the model's.
+    """
+    if not segments or min_words < 2:
+        return segments
+    out = [dict(s) for s in segments]
+    for seg in out:
+        if seg.get("words"):
+            seg["words"] = [dict(w) for w in seg["words"]]
+    kept: List[Dict] = []
+    for seg in out:
+        words = seg.get("words") or []
+        aligned = bool(words) and _clean("".join(w["word"] for w in words)) == _clean(seg.get("text", ""))
+        if kept and aligned:
+            before = [_plain(w["word"]) for w in (kept[-1].get("words") or [])] or \
+                     [_plain(w) for w in kept[-1].get("text", "").split()]
+            here = [_plain(w["word"]) for w in words]
+            before_words = kept[-1].get("words") or []
+            longest = min(len(before), len(here))
+            for k in range(longest, min_words - 1, -1):
+                if difflib.SequenceMatcher(None, before[-k:], here[:k], autojunk=False).ratio() < ratio:
+                    continue
+                if len(before_words) >= k:
+                    said = float(before_words[-1]["end"]) - float(before_words[-k]["start"])
+                    again = float(words[k - 1]["end"]) - float(words[0]["start"])
+                    if said > 0 and again >= said * max_speed:
+                        break                                     # said twice, at the speed of speech: his
+                words = words[k:]
+                if words:
+                    seg["words"] = words
+                    seg["text"] = _clean("".join(w["word"] for w in words))
+                    seg["start"] = float(words[0]["start"])       # the cue begins where its real words do
+                break
+            if not words:
+                continue                                          # the whole cue was the repeat
+        kept.append(seg)
+    return kept
 
 def _merged(a: Dict, b: Dict, capitalize: bool = True) -> Dict:
     head, tail = a.get("text", ""), b.get("text", "")

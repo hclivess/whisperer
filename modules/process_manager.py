@@ -13,9 +13,9 @@ from PySide6.QtCore import QObject, QThread, Signal
 from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
-from utils.subtitle_utils import (capitalize_sentences, enforce_min_duration, merge_short_cues,
-                                  repair_sentence_breaks, repair_sentence_starts, split_segments,
-                                  strip_foreign_script, write_subtitles)
+from utils.subtitle_utils import (capitalize_sentences, drop_repeated_text, enforce_min_duration,
+                                  merge_short_cues, repair_sentence_breaks, repair_sentence_starts,
+                                  split_segments, strip_foreign_script, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 from utils.verify_utils import merge_windows, resolve_passes, review_lines, vocabulary_prompt
@@ -292,6 +292,14 @@ class _Worker(QThread):
                 self.status.emit(f"Resync: offset {report['offset']:+.3f} s, speed {report['speed']:.5f} "
                                  f"({report['drift_per_hour']:+.1f} s/h), {report['inliers']}/{report['matches']} words agree")
             else:
+                if s.get("drop_repeated_text", True):
+                    # first of all, while the cues are still Whisper's own segments: a sentence the model
+                    # wrote a second time sits on top of the words that were really spoken there
+                    before_words = sum(len(x.get("text", "").split()) for x in segments)
+                    segments = drop_repeated_text(segments)
+                    removed = before_words - sum(len(x.get("text", "").split()) for x in segments)
+                    if removed:
+                        self.status.emit(f"Removed {removed} word(s) the model had written twice")
                 if s.get("repair_sentence_breaks", True):
                     # before splitting and snapping: the cue text is still Whisper's own, word for word
                     segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)

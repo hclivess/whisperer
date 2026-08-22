@@ -384,3 +384,52 @@ def test_repair_sentence_starts_measures_nothing_across_a_segment_without_timing
     second = _spoken(["And", "which", "is", "and", "so"], start=blind["end"] + 0.06)
     out = repair_sentence_starts([first, blind, second], 0.25)
     assert [s["text"] for s in out] == [first["text"], blind["text"], second["text"]]
+
+
+def _paced(tokens, start=0.0, dur=0.3, gap=0.05, fast_first=0, fast_dur=0.09, fast_gap=0.02):
+    """Words with timings; the first `fast_first` of them squeezed, the way a re-emission is."""
+    ws, t = [], start
+    for i, tok in enumerate(tokens):
+        d, g = (fast_dur, fast_gap) if i < fast_first else (dur, gap)
+        t += g
+        ws.append({"start": round(t, 2), "end": round(t + d, 2), "word": (" " if i else "") + tok})
+        t += d
+    return {"start": ws[0]["start"], "end": ws[-1]["end"], "text": " ".join(tokens), "words": ws}
+
+
+def test_drop_repeated_text_removes_a_sentence_the_model_wrote_twice():
+    from utils.subtitle_utils import drop_repeated_text
+    first = _paced("and the city was completely destroyed by the vows of hospitality".split())
+    second = _paced("But the city was completely destroyed by the vows of hospitality the person under "
+                    "your roof was under your protection".split(), start=first["end"] + 0.08, fast_first=11)
+    out = drop_repeated_text([first, second])
+    assert out[0]["text"] == first["text"]
+    assert out[1]["text"] == "the person under your roof was under your protection"
+    assert out[1]["start"] > second["start"]        # the cue now begins where its real words do
+    assert out[1]["words"][0]["word"].strip() == "the"
+
+
+def test_drop_repeated_text_keeps_what_the_speaker_really_said_twice():
+    from utils.subtitle_utils import drop_repeated_text
+    first = _paced("the inviolable vows of hospitality matter here".split())
+    for second in (_paced("the inviolable vows of hospitality matter here".split(), start=first["end"] + 0.1),
+                   _paced("the inviolable vows of hospitality matter here".split(), start=first["end"] + 0.1,
+                          dur=0.22, gap=0.03)):        # said again, faster - still him
+        out = drop_repeated_text([first, second])
+        assert [s["text"] for s in out] == [first["text"], second["text"]]
+
+
+def test_drop_repeated_text_leaves_short_repetitions_alone():
+    from utils.subtitle_utils import drop_repeated_text
+    # "that's, that's unsuccessful" is a stutter, not a re-emission: under the minimum length, untouched
+    first = _paced("that's unsuccessful right".split())
+    second = _paced("that's unsuccessful right that's chaos".split(), start=first["end"] + 0.06, fast_first=3)
+    assert [s["text"] for s in drop_repeated_text([first, second])] == [first["text"], second["text"]]
+
+
+def test_drop_repeated_text_needs_the_words_to_spell_the_text():
+    from utils.subtitle_utils import drop_repeated_text
+    first = _paced("and the city was completely destroyed by the vows of hospitality".split())
+    second = {"start": first["end"] + 0.1, "end": first["end"] + 3.0,
+              "text": "But the city was completely destroyed by the vows of hospitality and so on"}
+    assert drop_repeated_text([first, second]) == [first, second]
