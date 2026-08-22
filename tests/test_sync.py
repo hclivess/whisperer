@@ -228,8 +228,11 @@ def test_repair_leaves_abbreviations_ellipses_and_decimals_alone():
 
 def test_repair_without_word_timestamps_only_touches_impossible_endings():
     from utils.subtitle_utils import repair_sentence_breaks
-    cues = [{"start": 0, "end": 3, "text": "behind the facade of. Something else"},
-            {"start": 3, "end": 6, "text": "Magical. Agents of transformation."}]
+    cues = [{"start": 0, "end": 3, "text": "behind the facade of the. Something else"},
+            {"start": 3, "end": 6, "text": "Magical. Agents of transformation."},
+            {"start": 6, "end": 9, "text": "an indefinite number of things to attend to. So if you were painting"}]
     out = [c["text"] for c in repair_sentence_breaks(cues)]
-    assert out[0] == "behind the facade of something else"   # "of." cannot end a sentence
-    assert out[1] == "Magical. Agents of transformation."    # no evidence: left alone
+    assert out[0] == "behind the facade of the something else"   # "the." cannot end a sentence, ever
+    assert out[1] == "Magical. Agents of transformation."        # no evidence: left alone
+    # a stranded preposition is a perfectly good sentence end - without a measured pause, hands off
+    assert out[2] == "an indefinite number of things to attend to. So if you were painting"
