@@ -242,20 +242,54 @@ def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> Lis
     return out
 
 
-def _case_profile(segments: List[Dict]) -> set:
-    """
-    Words this transcript ever writes in lower case - so the ones it never does are the possible names.
+_POSSESSIVE = re.compile(r"['\u2019]s$")
 
-    One lower-case sighting anywhere proves a word is an ordinary one, whatever a capital elsewhere might
-    suggest. Everything else is left alone: not touching a name is worth missing a few repairs.
+
+def _title_cased(words: List[str]) -> bool:
     """
-    seen = set()
+    Is this line Capitalised On Every Word?
+
+    Such a stretch is a decode that came apart, not evidence about how the file writes a word - counting it
+    turned one "It's A Rebuke To Everything" into a licence to capitalise "rebuke" everywhere else.
+    """
+    real = [w for w in words if any(ch.isalnum() for ch in w)]
+    if len(real) < 4:
+        return False
+    return sum(1 for w in real[1:] if w[:1].isupper()) / (len(real) - 1) > 0.6
+
+
+def _name_key(core: str) -> str:
+    """A word and its possessive are the same name: Elijah / Elijah's."""
+    return _POSSESSIVE.sub("", core.lower())
+
+
+def _case_profile(segments: List[Dict]) -> Dict[str, List[int]]:
+    """
+    How this transcript writes each word: [times capitalised, times in lower case], sentence starts aside.
+
+    Whisper is not consistent about names - the same lecture gives "Socrates" in one window and "socrates"
+    in the next - so which way a word goes is decided by the whole file rather than by any one sighting.
+    Sentence-initial words are not counted at all: their capital says nothing about the word.
+    """
+    counts: Dict[str, List[int]] = {}
     for seg in segments:
-        for w in seg.get("text", "").split():
+        words = seg.get("text", "").split()
+        if _title_cased(words):
+            continue                    # a decode that went to Title Case says nothing about any word
+        sentence_start = True
+        for w in words:
             core = w.strip("\"'([{)]}").rstrip(",;:.!?…")
-            if core and core[:1].islower():
-                seen.add(core.lower())
-    return seen
+            if core and not sentence_start and core[:1].isalpha():
+                tally = counts.setdefault(_name_key(core), [0, 0])
+                tally[0 if core[:1].isupper() else 1] += 1
+            sentence_start = bool(core[-1:] in ".!?…")
+    return counts
+
+
+def _mostly_lower(counts: Dict[str, List[int]], core: str) -> bool:
+    """Does this transcript write the word in lower case at least as often as not?"""
+    upper, lower = counts.get(_name_key(core), [0, 0])
+    return lower >= upper and lower > 0
 
 
 def _word_stream(segments: List[Dict]) -> List[Optional[Tuple[int, int, Dict, bool]]]:
@@ -361,8 +395,8 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
             continue                                   # lower case already, or an acronym
         if len(core) == 1 and token.rstrip("\"'”’»)]").endswith("."):
             continue                                   # "J. R. R.": an initial, not a word
-        if core == "I" or core.startswith("I'") or core.lower() not in common:
-            continue                                   # "I", or a word never seen in lower case: a name
+        if core == "I" or core.startswith("I'") or not _mostly_lower(common, core):
+            continue                                   # "I", or a word this file mostly capitalises: a name
         prev_token = prev["word"].strip()
         if _SENTENCE_END.search(prev_token):
             continue                                   # the sentence is already closed: nothing to settle
@@ -441,6 +475,62 @@ def drop_repeated_text(segments: List[Dict], min_words: int = 6, ratio: float = 
                 continue                                          # the whole cue was the repeat
         kept.append(seg)
     return kept
+
+_I_FORMS = {"i", "i'm", "i've", "i'll", "i'd"}
+
+
+def unify_word_case(segments: List[Dict], english: bool = True, majority: float = 0.6,
+                    min_sightings: int = 2) -> List[Dict]:
+    """
+    Give a word the case this transcript mostly gives it.
+
+    Whisper is not consistent about names: the same lecture writes "Socrates" in one window and "socrates"
+    in the next, "Maps of Meaning" here and "maps of meaning" there. Nothing in the audio decides it - the
+    rest of the file does. A word capitalised in most of its mid-sentence sightings is capitalised in the
+    others too; a word the file mostly writes in lower case is left alone, which keeps ordinary words that
+    happen to start a sentence somewhere ("will", "mark", "rose") out of it.
+
+    In English the pronoun "I" is also restored, since a lower-case "i" is never right - and only in
+    English, where "i" is not a word of its own.
+    """
+    if not segments:
+        return segments
+    out = [dict(s) for s in segments]
+    for seg in out:
+        if seg.get("words"):
+            seg["words"] = [dict(w) for w in seg["words"]]
+    counts = _case_profile(out)
+    names = {word for word, (upper, lower) in counts.items()
+             if upper >= min_sightings and upper >= majority * (upper + lower)}
+    if not names and not english:
+        return segments
+
+    def fixed(token: str) -> str:
+        core = token.strip("\"'([{)]}").rstrip(",;:.!?…")
+        if not core or not core[:1].islower():
+            return token
+        if english and core.lower() in _I_FORMS:
+            return token.replace(core, core[0].upper() + core[1:], 1)
+        if _name_key(core) in names:
+            return token.replace(core, core[0].upper() + core[1:], 1)
+        return token
+
+    for seg in out:
+        words = seg.get("words") or []
+        aligned = bool(words) and _clean("".join(w["word"] for w in words)) == _clean(seg.get("text", ""))
+        if aligned:
+            new_words = []
+            for w in words:
+                lead = w["word"][:len(w["word"]) - len(w["word"].lstrip())]
+                new_words.append({**w, "word": lead + fixed(w["word"].strip())})
+            if any(a["word"] != b["word"] for a, b in zip(words, new_words)):
+                seg["words"] = new_words
+                seg["text"] = _clean("".join(w["word"] for w in new_words))
+        else:
+            text = re.sub(r"\S+", lambda m: fixed(m.group(0)), seg.get("text", ""))
+            if text != seg.get("text", ""):
+                seg["text"] = text          # line breaks and spacing stay exactly as they were
+    return out
 
 def _merged(a: Dict, b: Dict, capitalize: bool = True) -> Dict:
     head, tail = a.get("text", ""), b.get("text", "")

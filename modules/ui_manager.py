@@ -731,6 +731,17 @@ class UIManager(QWidget):
             "sentence does not end on (\"to\", \"the\", \"and\"), and a word this transcript never writes in "
             "lower case may be a name, so it keeps its capital. Needs word timestamps (on automatically).")
         grid.addWidget(self.controls["repair_sentence_starts"], 6, 0, 1, 2)
+        self.controls["unify_word_case"] = QCheckBox("Give a name the case the rest of the file gives it")
+        self.controls["unify_word_case"].setChecked(True)
+        self.controls["unify_word_case"].setToolTip(
+            "Whisper is not consistent about names: the same lecture writes \"Socrates\" in one window and "
+            "\"socrates\" in the next, \"Maps of Meaning\" here and \"maps of meaning\" there. Nothing in the "
+            "audio decides it, so the rest of the file does - a word capitalised in most of its mid-sentence "
+            "sightings is capitalised in the others too.\n\n"
+            "A word the file mostly writes in lower case is left alone, which keeps ordinary words that happen "
+            "to start a sentence somewhere (\"will\", \"mark\", \"rose\") out of it, and a name has to be seen "
+            "capitalised at least twice before it counts. In English the pronoun \"I\" is restored too.")
+        grid.addWidget(self.controls["unify_word_case"], 8, 0, 1, 2)
         self.controls["drop_repeated_text"] = QCheckBox("Remove a sentence the model wrote twice")
         self.controls["drop_repeated_text"].setChecked(True)
         self.controls["drop_repeated_text"].setToolTip(
@@ -740,13 +751,13 @@ class UIManager(QWidget):
             "A speaker repeating himself is not this: saying a phrase twice takes roughly the same time both "
             "times, while a re-emission is squeezed into whatever room is left, so the copy is compared with "
             "the original by the clock. Short repetitions are never touched at all.")
-        grid.addWidget(self.controls["drop_repeated_text"], 8, 0, 1, 2)
+        grid.addWidget(self.controls["drop_repeated_text"], 9, 0, 1, 2)
         self.controls["review_list"] = QCheckBox("Write a review list (.review.txt)")
         self.controls["review_list"].setToolTip(
             "Off by default. Writes the places worth a human eye next to the subtitles: every span where the "
             "passes disagreed with what each of them said, and the cues the decoder was least sure of. "
             "Nothing is rewritten - a mis-hearing every pass agrees on can only be found by reading.")
-        grid.addWidget(self.controls["review_list"], 9, 0, 1, 2)
+        grid.addWidget(self.controls["review_list"], 10, 0, 1, 2)
         self.controls["sentence_pause_ms"] = QSpinBox()
         self.controls["sentence_pause_ms"].setRange(0, 2000)
         self.controls["sentence_pause_ms"].setSingleStep(50)
@@ -1204,6 +1215,7 @@ class UIManager(QWidget):
             "strip_foreign_script": c["strip_foreign_script"].isChecked(),
             "repair_sentence_breaks": c["repair_sentence_breaks"].isChecked(),
             "repair_sentence_starts": c["repair_sentence_starts"].isChecked(),
+            "unify_word_case": c["unify_word_case"].isChecked(),
             "drop_repeated_text": c["drop_repeated_text"].isChecked(),
             "review_list": c["review_list"].isChecked(),
             "sentence_pause_ms": c["sentence_pause_ms"].value(),

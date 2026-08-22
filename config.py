@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.7.4"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -95,6 +95,7 @@ DEFAULT_SETTINGS = {
     "repair_sentence_breaks": True,
     "repair_sentence_starts": True,
     "drop_repeated_text": True,     # remove a sentence the model wrote a second time
+    "unify_word_case": True,        # a name gets the case the rest of the file gives it
     "sentence_pause_ms": 250,
     "strip_foreign_script": True,
     "review_list": False,           # write <name>.review.txt: where the passes disagreed

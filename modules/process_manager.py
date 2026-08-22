@@ -15,7 +15,7 @@ from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_w
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
 from utils.subtitle_utils import (capitalize_sentences, drop_repeated_text, enforce_min_duration,
                                   merge_short_cues, repair_sentence_breaks, repair_sentence_starts,
-                                  split_segments, strip_foreign_script, write_subtitles)
+                                  split_segments, strip_foreign_script, unify_word_case, write_subtitles)
 from utils import childproc
 from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
 from utils.verify_utils import merge_windows, resolve_passes, review_lines, vocabulary_prompt
@@ -307,6 +307,11 @@ class _Worker(QThread):
                     # the other half of the same idea: a capital with no full stop in front of it is either
                     # a sentence Whisper forgot to close or one it started at a window boundary
                     segments = repair_sentence_starts(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
+                if s.get("unify_word_case", True):
+                    # Whisper writes "Socrates" in one window and "socrates" in the next; nothing in the
+                    # audio decides which is right, so the rest of the file does
+                    english = s.get("task") == "translate" or str(s.get("language", "en")).startswith("en")
+                    segments = unify_word_case(segments, english=english)
                 segments = split_segments(segments, int(s["max_line_chars"]), int(s["max_lines"]),
                                           float(s["max_segment_seconds"]))
 

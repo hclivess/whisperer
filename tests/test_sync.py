@@ -301,9 +301,9 @@ def _spoken(tokens, gaps=None, start=0.0, word_seconds=0.3, gap=0.05):
 def test_repair_sentence_starts_lowers_a_capital_nobody_paused_for():
     from utils.subtitle_utils import repair_sentence_starts
     # Whisper starts every 30 s window as a fresh utterance: "a rebuke to A stale order"
-    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order"])
+    seg = _spoken(["a", "rebuke", "to", "A", "stale", "order", "and", "a", "stale", "idea"])
     out = repair_sentence_starts([seg], 0.25)
-    assert out[0]["text"] == "a rebuke to a stale order"
+    assert out[0]["text"] == "a rebuke to a stale order and a stale idea"
     assert out[0]["words"][3]["word"] == " a"          # the word list is kept in step with the text
 
 
@@ -453,3 +453,40 @@ def test_drop_repeated_text_needs_the_words_to_spell_the_text():
     second = {"start": first["end"] + 0.1, "end": first["end"] + 3.0,
               "text": "But the city was completely destroyed by the vows of hospitality and so on"}
     assert drop_repeated_text([first, second]) == [first, second]
+
+
+def test_unify_word_case_gives_a_name_the_case_the_file_gives_it():
+    from utils.subtitle_utils import unify_word_case
+    segments = [{"text": "the book Maps of Meaning ends with a chapter"},
+                {"text": "he read Maps of Meaning twice and said so"},
+                {"text": "it's like socrates and it's fine"},
+                {"text": "that's the proclamation and Socrates knew it"},
+                {"text": "when Socrates spoke of it he meant it"},
+                {"text": "i read the audio version of maps of meaning and recorded it"},
+                {"text": "he will mark the rose and the will of the people"}]
+    out = [s["text"] for s in unify_word_case(segments)]
+    assert out[2] == "it's like Socrates and it's fine"
+    assert out[5] == "I read the audio version of Maps of Meaning and recorded it"
+    assert out[6] == "he will mark the rose and the will of the people"   # ordinary words are never touched
+
+
+def test_unify_word_case_needs_more_than_one_sighting():
+    from utils.subtitle_utils import unify_word_case
+    # a single capital proves nothing - it could be a Title-Cased artefact or a sentence start
+    segments = [{"text": "he spoke of Interest and of interest again"}, {"text": "the interest was real"}]
+    assert [s["text"] for s in unify_word_case(segments)] == [s["text"] for s in segments]
+
+
+def test_unify_word_case_keeps_the_words_in_step_with_the_text():
+    from utils.subtitle_utils import unify_word_case
+    a = _spoken(["when", "Socrates", "spoke", "of", "Socrates", "he", "meant", "it"])
+    b = _spoken(["it's", "like", "socrates", "and", "i", "agree"], start=a["end"] + 0.2)
+    out = unify_word_case([a, b])
+    assert out[1]["text"] == "it's like Socrates and I agree"
+    assert "".join(w["word"] for w in out[1]["words"]).strip() == out[1]["text"]
+
+
+def test_unify_word_case_leaves_i_alone_outside_english():
+    from utils.subtitle_utils import unify_word_case
+    segments = [{"text": "i libri sono i miei"}, {"text": "i miei libri sono i tuoi"}]
+    assert [s["text"] for s in unify_word_case(segments, english=False)] == [s["text"] for s in segments]
