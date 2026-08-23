@@ -174,6 +174,15 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.10
+
+- **The Windows taskbar shows the app's own icon.** The taskbar button takes its icon from the process's
+  Application User Model ID rather than from the window, and with none of its own the process was grouped
+  under whatever launched it and wore that program's icon. One is now set before any window exists, and it
+  carries no version number so a pinned button survives an upgrade.
+- The icon is also found reliably wherever it ends up — beside the frozen executable, inside a one-file
+  bundle, or in the source tree — instead of only where deriving the path from `__file__` happened to look.
+
 ## Changes in 1.7.9
 
 - **A possessive counts as proof of a name.** A name mentioned only twice in a long recording, with one of

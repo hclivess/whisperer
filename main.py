@@ -148,15 +148,51 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _icon_path() -> str:
+    """
+    Where the icon ended up: beside the frozen executable, inside the bundle, or in the source tree.
+
+    A one-dir build copies icon.ico next to the .exe, a one-file build unpacks it into _MEIPASS, and a
+    checkout has it in the project folder. Deriving the path from __file__ alone found it in some of those
+    and not others, and a window with no icon is what Windows falls back to its own default for.
+    """
+    bases = []
+    if getattr(sys, "frozen", False):
+        bases.append(os.path.dirname(os.path.abspath(sys.executable)))
+    if getattr(sys, "_MEIPASS", None):
+        bases.append(sys._MEIPASS)
+    bases.append(os.path.dirname(os.path.abspath(__file__)))
+    for base in bases:
+        for name in ("icon.ico", "icon.png"):
+            candidate = os.path.join(base, name)
+            if os.path.exists(candidate):
+                return candidate
+    return ""
+
+
 def main():
+    if sys.platform == "win32":
+        # The taskbar button takes its icon from the process's Application User Model ID, not from the
+        # window: with none of its own the process is grouped under whatever launched it - the Python
+        # host, or the shell - and shows that program's icon instead of ours. Must happen before any
+        # window exists. The id is deliberately version-free, so a pinned button survives an upgrade.
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"hclivess.{APP_NAME}")
+        except Exception:
+            pass                        # older Windows, or no shell32: the window icon still applies
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     from utils import childproc
     childproc.install_qt_hook(app)      # quitting — for any reason — kills ffmpeg / whisper-cli we started
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    icon_path = _icon_path()
+    if icon_path:
+        icon = QIcon(icon_path)
+        app.setWindowIcon(icon)
     window = MainWindow()
+    if icon_path:
+        window.setWindowIcon(icon)      # some Qt/Windows combinations read it from the window, not the app
     window.show()
     selftest = os.environ.get("WHISPERER_SELFTEST")
     if selftest:
