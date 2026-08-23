@@ -145,6 +145,12 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.8
+
+- A file given by a bare name, with no directory part, no longer fails with an unexplained
+  `FileNotFoundError: ''` — the output folder is resolved from the absolute path of the source. The file
+  dialog and drag-and-drop always give absolute paths, so this only ever bit callers that did not.
+
 ## Changes in 1.7.7
 
 - **The Live Transcript now shows what was written.** It filled from the first decode and was never touched

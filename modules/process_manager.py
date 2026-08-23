@@ -142,7 +142,10 @@ class _Worker(QThread):
             raise RuntimeError("faster-whisper is not installed (pip install faster-whisper)")
 
         # where do outputs go?
-        out_dir = s["output_dir"] if s["output_mode"] == "custom" and s["output_dir"] else os.path.dirname(src)
+        # abspath, not dirname: a source given as a bare file name has no directory part, and the empty
+        # string that came out of it failed later as a mkdir of ""
+        out_dir = (s["output_dir"] if s["output_mode"] == "custom" and s["output_dir"]
+                   else os.path.dirname(os.path.abspath(src)))
         os.makedirs(out_dir, exist_ok=True)
         stem = os.path.splitext(os.path.basename(src))[0] + (s.get("suffix") or "")
         if s.get("sync_mode") == "resync" and not s.get("suffix"):
