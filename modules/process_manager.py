@@ -13,7 +13,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 from config import MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
-from utils.subtitle_utils import (capitalize_sentences, drop_repeated_text, enforce_min_duration,
+from utils.subtitle_utils import (capitalize_sentences, drop_looped_text, drop_repeated_text,
+                                  enforce_min_duration,
                                   merge_short_cues, repair_sentence_breaks, repair_sentence_starts,
                                   split_segments, strip_foreign_script, unify_word_case, write_subtitles)
 from utils import childproc
@@ -301,9 +302,19 @@ class _Worker(QThread):
                     # wrote a second time sits on top of the words that were really spoken there
                     before_words = sum(len(x.get("text", "").split()) for x in segments)
                     segments = drop_repeated_text(segments)
+                    segments = drop_looped_text(segments)
                     removed = before_words - sum(len(x.get("text", "").split()) for x in segments)
                     if removed:
                         self.status.emit(f"Removed {removed} word(s) the model had written twice")
+                    # a cue still claiming more words than a mouth could say is worth naming, even though
+                    # nothing here knows what is wrong with it
+                    dense = [x for x in segments
+                             if float(x["end"]) > float(x["start"])
+                             and len(x.get("text", "").split()) / (float(x["end"]) - float(x["start"])) > 9.0]
+                    if dense:
+                        meta["dense_cues"] = [round(float(x["start"]), 2) for x in dense[:20]]
+                        self.status.emit(f"{len(dense)} cue(s) hold more words than their span can carry — "
+                                         f"first at {dense[0]['start']:.0f}s")
                 if s.get("repair_sentence_breaks", True):
                     # before splitting and snapping: the cue text is still Whisper's own, word for word
                     segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)

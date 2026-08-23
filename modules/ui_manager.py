@@ -745,7 +745,7 @@ class UIManager(QWidget):
             "to start a sentence somewhere (\"will\", \"mark\", \"rose\") out of it, and a name has to be seen "
             "capitalised at least twice before it counts. In English the pronoun \"I\" is restored too.")
         grid.addWidget(self.controls["unify_word_case"], 8, 0, 1, 2)
-        self.controls["drop_repeated_text"] = QCheckBox("Remove a sentence the model wrote twice")
+        self.controls["drop_repeated_text"] = QCheckBox("Remove text the model repeated")
         self.controls["drop_repeated_text"].setChecked(True)
         self.controls["drop_repeated_text"].setToolTip(
             "After a window boundary Whisper sometimes writes the sentence it has just written again and then "
@@ -753,7 +753,12 @@ class UIManager(QWidget):
             "run is removed and the cue keeps its real continuation.\n\n"
             "A speaker repeating himself is not this: saying a phrase twice takes roughly the same time both "
             "times, while a re-emission is squeezed into whatever room is left, so the copy is compared with "
-            "the original by the clock. Short repetitions are never touched at all.")
+            "the original by the clock. Short repetitions are never touched at all.\n\n"
+            "The same setting folds away a phrase the decoder latched onto and repeated until the window ran "
+            "out - twenty-five words inside a second and a half. There the giveaway is arithmetic: the cue "
+            "claims more words than a mouth can produce in its span, and folding the repeat down to one copy "
+            "brings it back to a rate a person could speak at. A cue that stays impossible afterwards is left "
+            "alone and named in the log instead.")
         grid.addWidget(self.controls["drop_repeated_text"], 9, 0, 1, 2)
         self.controls["review_list"] = QCheckBox("Write a review list (.review.txt)")
         self.controls["review_list"].setToolTip(

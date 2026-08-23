@@ -10,6 +10,8 @@ import re
 import textwrap
 from typing import Dict, List, Optional, Tuple
 
+from utils.sync_utils import _tokens
+
 
 def _ts_srt(t: float) -> str:
     t = max(0.0, t)
@@ -547,6 +549,98 @@ def unify_word_case(segments: List[Dict], english: bool = True, majority: float 
             text = re.sub(r"\S+", lambda m: fixed(m.group(0)), seg.get("text", ""))
             if text != seg.get("text", ""):
                 seg["text"] = text          # line breaks and spacing stay exactly as they were
+    return out
+
+# A cue cannot hold more words than a mouth can say in its span. Fast speech runs to about 6 words a
+# second; these two numbers leave room above that, so nothing a person can actually do is touched.
+IMPOSSIBLE_RATE = 9.0
+PLAUSIBLE_RATE = 7.5
+
+
+def _loop_span(tokens: List[str], min_repeats: int = 2, max_phrase: int = 10) -> Optional[Tuple[int, int, int]]:
+    """
+    The shortest block of words repeated back to back, counting a final copy cut off part way.
+
+    Returns (start, block length, tokens covered) or None. Shortest, because that is the loop's actual
+    period: five words repeated four times also matches as ten words repeated twice, and folding the ten
+    would leave half the loop standing. A loop that runs out at the end of the cue is the normal shape, not
+    the exception - the decoder was still repeating when the cue ended.
+    """
+    best = None
+    for length in range(2, max_phrase + 1):
+        for i in range(len(tokens) - length):
+            block = tokens[i:i + length]
+            full = 1
+            while tokens[i + full * length: i + (full + 1) * length] == block:
+                full += 1
+            if full < min_repeats:
+                continue
+            tail, rest = 0, tokens[i + full * length:]
+            while tail < min(length, len(rest)) and rest[tail] == block[tail]:
+                tail += 1
+            covered = full * length + tail
+            if best is None or covered > best[2]:
+                best = (i, length, covered)
+        if best:
+            return best
+    return None
+
+
+def drop_looped_text(segments: List[Dict], impossible: float = IMPOSSIBLE_RATE,
+                     plausible: float = PLAUSIBLE_RATE) -> List[Dict]:
+    """
+    Fold away a phrase the decoder repeated in less time than saying it once would take.
+
+    Whisper sometimes latches onto a few words and repeats them until the window ends. The words are real
+    and the audio under them is speech, so neither the VAD nor a second decode helps: every pass hears the
+    same thing and agrees. What gives it away is arithmetic - twenty-five words inside a second and a half.
+
+    Two conditions, both required. The cue must claim more words than a mouth can produce in its span, and
+    folding the repeated block down to one copy must bring it back to a rate a person could speak at. A cue
+    that stays impossible after folding is left exactly as it is: something else is wrong with it, and this
+    function does not know what. Repetition at a human rate is the speaker repeating himself and is never
+    touched, however many times he does it.
+    """
+    if not segments:
+        return segments
+    out = []
+    for seg in segments:
+        text, words = seg.get("text", ""), seg.get("words") or []
+        duration = float(seg["end"]) - float(seg["start"])
+        tokens = _tokens(text)
+        aligned = bool(words) and _clean("".join(w["word"] for w in words)) == _clean(text)
+        if duration <= 0 or not tokens or len(tokens) / duration <= impossible or not aligned:
+            out.append(seg)
+            continue
+        # map every token back to the word it came from - a contraction is one word and two tokens, so
+        # the ranges only line up if the fold starts and ends on a word boundary
+        spans, at = [], 0
+        for w in words:
+            n = len(_tokens(w["word"]))
+            spans.append((at, at + n))
+            at += n
+        if at != len(tokens):
+            out.append(seg)
+            continue
+        found = _loop_span(tokens)
+        if not found:
+            out.append(seg)
+            continue
+        start, length, covered = found
+        cut_from, cut_to = start + length, start + covered
+        first = next((i for i, (a, b) in enumerate(spans) if a == cut_from), None)
+        last = next((i for i, (a, b) in enumerate(spans) if b == cut_to), None)
+        if first is None or last is None or last < first:
+            out.append(seg)
+            continue
+        keep = words[:first] + words[last + 1:]
+        if not keep or len(keep) / duration > plausible:
+            out.append(seg)
+            continue
+        new = dict(seg)
+        new["words"] = [dict(w) for w in keep]
+        new["text"] = _clean("".join(w["word"] for w in keep))
+        out.append(new)
     return out
 
 def _merged(a: Dict, b: Dict, capitalize: bool = True) -> Dict:

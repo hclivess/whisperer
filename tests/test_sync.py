@@ -517,3 +517,54 @@ def test_unify_word_case_never_treats_an_interjection_as_a_name():
     segments = [{"text": "so Okay that is the first thing"}, {"text": "and Okay that is the second"},
                 {"text": "then Okay we can move on"}, {"text": "it was okay in the end"}]
     assert [s["text"] for s in unify_word_case(segments)][3] == "it was okay in the end"
+
+
+def _at_rate(words, rate, start=0.0):
+    """A segment whose words are timed to come out at `rate` words per second."""
+    step = 1.0 / rate
+    timed, t = [], start
+    for i, w in enumerate(words):
+        timed.append({"start": round(t, 3), "end": round(t + step * 0.9, 3), "word": (" " if i else "") + w})
+        t += step
+    return {"start": start, "end": round(start + step * len(words), 3), "text": " ".join(words),
+            "words": timed}
+
+
+def test_drop_looped_text_folds_a_phrase_repeated_faster_than_speech():
+    from utils.subtitle_utils import drop_looped_text
+    # the decoder latched on and repeated until the window ended: 24 words inside 1.6 seconds
+    loop = "the same short phrase again".split() * 4
+    seg = _at_rate(["and"] + loop, 15.0)
+    out = drop_looped_text([seg])[0]
+    assert out["text"] == "and the same short phrase again"
+    assert "".join(w["word"] for w in out["words"]).strip() == out["text"]
+    assert out["start"] == seg["start"] and out["end"] == seg["end"]   # the span is not ours to change
+
+
+def test_drop_looped_text_counts_a_copy_cut_off_at_the_cue_end():
+    from utils.subtitle_utils import drop_looped_text
+    # a loop running out mid-copy is the normal shape - the cue ended before the decoder stopped
+    seg = _at_rate("one two three one two three one two".split(), 14.0)
+    assert drop_looped_text([seg])[0]["text"] == "one two three"
+
+
+def test_drop_looped_text_leaves_a_speaker_who_repeats_himself_alone():
+    from utils.subtitle_utils import drop_looped_text
+    # the same words, said at a rate a person can actually speak at: his, not the model's
+    words = "the same short phrase again".split() * 3
+    assert drop_looped_text([_at_rate(words, 6.0)])[0]["text"] == " ".join(words)
+    assert drop_looped_text([_at_rate(words, 7.4)])[0]["text"] == " ".join(words)
+
+
+def test_drop_looped_text_leaves_a_cue_that_stays_impossible():
+    from utils.subtitle_utils import drop_looped_text
+    # folding the repeat would still leave far too many words for the span: something else is wrong here,
+    # and this function does not know what, so it changes nothing
+    seg = _at_rate("alpha bravo alpha bravo charlie delta echo foxtrot golf hotel india".split(), 20.0)
+    assert drop_looped_text([seg])[0]["text"] == seg["text"]
+
+
+def test_drop_looped_text_needs_words_that_spell_the_text():
+    from utils.subtitle_utils import drop_looped_text
+    plain = [{"start": 0.0, "end": 1.5, "text": " ".join("a loop of words".split() * 4)}]
+    assert drop_looped_text(plain) == plain
