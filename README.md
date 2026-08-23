@@ -115,6 +115,35 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 Resync picks `movie.srt` / `movie.vtt` next to the video unless you choose a file. A file that does not match the
 audio (wrong language, different cut) is rejected with an explanation rather than guessed at.
 
+## Measured on real film
+
+Three openly licensed films (CC-BY, Blender Foundation), three-minute excerpts, run through the app end to
+end with the ordinary defaults — three passes, snapping, and every repair on. Nothing was tuned for them.
+
+| | Tears of Steel | Elephants Dream | Sintel |
+|---|---|---|---|
+| container / codec | MOV, H.264 + AAC | Ogg, Theora + Vorbis | Ogg, Theora + Vorbis |
+| model | `base.en`, then `large-v3` | `large-v3` | `large-v3` |
+| cues below *Min cue duration* | 0 | 0 | 0 |
+| lines over *Max line length* | 0 | 0 | 0 |
+| gaps below *Min gap* | 0 | 0 | 0 |
+| capitals with no full stop before them | 1 / 0 | 2, both correct (a name, and a word standing before it) | 0 |
+| text invented over non-speech | none | none | none |
+
+**Against the official subtitles.** Tears of Steel ships an English subtitle file, so the regenerated cues
+can be scored against it. Words matching the official text rose from **59.6 % with `base.en` to 67.0 % with
+`large-v3`** on identical audio; of the 23 official cues in that stretch, 12 came back almost entirely, 8
+partially and 3 not at all — and all three of the misses sit where score and effects bury the dialogue.
+Timing landed within **0.27 s** of the official cues (`large-v3`), our cues sitting a fraction later because
+subtitles are conventionally timed a beat early while snapping puts them on the speech onset.
+
+**Where nothing was said.** Sintel's excerpt is 183 seconds holding only 26 seconds of dialogue — the rest
+is score and action. Nothing was invented over any of it, which is the case the multi-pass verification
+exists for and the VAD filter usually prevents from arising at all.
+
+This is a snapshot on short excerpts rather than a benchmark: it says the pipeline's guarantees hold on real
+material and real containers, not how well Whisper transcribes any particular film.
+
 ## Output
 
 For `movie.mp4` with language English you get `movie.en.srt` (and any other selected formats). With *Embed into video*
