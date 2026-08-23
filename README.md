@@ -174,6 +174,16 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.7.11
+
+- **The icon file had no small sizes.** `icon.ico` held a single 256×256 uncompressed bitmap, and the
+  Windows taskbar draws at 16, 24 and 32 pixels — with nothing it could use, the shell fell back to its
+  generic application icon. The file now carries 16, 20, 24, 32, 40, 48, 64 and 128 pixel images as
+  bitmaps, with the 256 kept PNG-compressed, which is the layout Windows has always accepted. It is also
+  smaller than before.
+- Together with the Application User Model ID added in 1.7.10, the taskbar now has both halves of what it
+  needs: an identity of its own, and an icon it can actually draw at the size it wants.
+
 ## Changes in 1.7.10
 
 - **The Windows taskbar shows the app's own icon.** The taskbar button takes its icon from the process's
