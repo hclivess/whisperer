@@ -265,11 +265,15 @@ def _name_key(core: str) -> str:
 
 def _case_profile(segments: List[Dict]) -> Dict[str, List[int]]:
     """
-    How this transcript writes each word: [times capitalised, times in lower case], sentence starts aside.
+    How this transcript writes each word: [capitalised, lower case, capitalised as a possessive].
 
     Whisper is not consistent about names - the same lecture gives "Halloran" in one window and "halloran"
     in the next - so which way a word goes is decided by the whole file rather than by any one sighting.
     Sentence-initial words are not counted at all: their capital says nothing about the word.
+
+    The third count is the exception that lets a name be recognised from a single sighting. One capital on
+    its own is weak evidence - Whisper capitalises ordinary words mid-phrase all the time, which is what the
+    sentence-start repair is for - but "somebody\'s" is a possessive, and a possessive is somebody.
     """
     counts: Dict[str, List[int]] = {}
     for seg in segments:
@@ -280,15 +284,21 @@ def _case_profile(segments: List[Dict]) -> Dict[str, List[int]]:
         for w in words:
             core = w.strip("\"'([{)]}").rstrip(",;:.!?…")
             if core and not sentence_start and core[:1].isalpha():
-                tally = counts.setdefault(_name_key(core), [0, 0])
-                tally[0 if core[:1].isupper() else 1] += 1
+                tally = counts.setdefault(_name_key(core), [0, 0, 0])
+                if core[:1].isupper():
+                    tally[0] += 1
+                    if _POSSESSIVE.search(core):
+                        tally[2] += 1
+                else:
+                    tally[1] += 1
             sentence_start = bool(core[-1:] in ".!?…")
     return counts
 
 
 def _mostly_lower(counts: Dict[str, List[int]], core: str) -> bool:
     """Does this transcript write the word in lower case at least as often as not?"""
-    upper, lower = counts.get(_name_key(core), [0, 0])
+    tally = counts.get(_name_key(core), [0, 0, 0])
+    upper, lower = tally[0], tally[1]
     return lower >= upper and lower > 0
 
 
@@ -477,6 +487,11 @@ def drop_repeated_text(segments: List[Dict], min_words: int = 6, ratio: float = 
     return kept
 
 _I_FORMS = {"i", "i'm", "i've", "i'll", "i'd"}
+# Words that are never somebody's name, however often the decoder capitalises them. They open an utterance
+# constantly - "okay so", "right, and" - and every one of those capitals that lands mid-phrase would
+# otherwise be evidence that the word is a name.
+_NEVER_A_NAME = {"okay", "ok", "yeah", "yes", "no", "well", "right", "sure", "hey", "oh", "so", "anyway",
+                 "actually", "maybe", "please", "thanks", "hello", "goodbye", "alright"}
 
 
 def unify_word_case(segments: List[Dict], english: bool = True, majority: float = 0.6,
@@ -500,8 +515,10 @@ def unify_word_case(segments: List[Dict], english: bool = True, majority: float 
         if seg.get("words"):
             seg["words"] = [dict(w) for w in seg["words"]]
     counts = _case_profile(out)
-    names = {word for word, (upper, lower) in counts.items()
-             if upper >= min_sightings and upper >= majority * (upper + lower)}
+    # a possessive is somebody: one sighting of "somebody\'s" is worth the two an ordinary word needs
+    names = {word for word, (upper, lower, possessive) in counts.items()
+             if word not in _NEVER_A_NAME
+             and upper >= majority * (upper + lower) and (upper >= min_sightings or (upper and possessive))}
     if not names and not english:
         return segments
 

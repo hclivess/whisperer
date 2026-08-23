@@ -490,3 +490,30 @@ def test_unify_word_case_leaves_i_alone_outside_english():
     from utils.subtitle_utils import unify_word_case
     segments = [{"text": "i libri sono i miei"}, {"text": "i miei libri sono i tuoi"}]
     assert [s["text"] for s in unify_word_case(segments, english=False)] == [s["text"] for s in segments]
+
+
+def test_unify_word_case_takes_a_possessive_as_proof_of_a_name():
+    from utils.subtitle_utils import unify_word_case
+    # one capitalised sighting is normally not enough - but "somebody's" is a possessive, and a possessive
+    # is somebody. The lower-case sighting here sits at a cue start, where a capital would prove nothing.
+    segments = [{"text": "the point of Halloran's argument was simple"},
+                {"text": "halloran said it again later on"},
+                {"text": "and that was the end of the matter"}]
+    assert [s["text"] for s in unify_word_case(segments)][1] == "Halloran said it again later on"
+
+
+def test_unify_word_case_still_needs_two_sightings_without_a_possessive():
+    from utils.subtitle_utils import unify_word_case
+    # Whisper capitalises ordinary words mid-phrase all the time; one such capital proves nothing
+    segments = [{"text": "we did it Optimally in the end"},
+                {"text": "optimally is a strong word for it"},
+                {"text": "and optimally was never the point"}]
+    assert [s["text"] for s in unify_word_case(segments)] == [s["text"] for s in segments]
+
+
+def test_unify_word_case_never_treats_an_interjection_as_a_name():
+    from utils.subtitle_utils import unify_word_case
+    # "okay" opens an utterance constantly, so it collects capitals that mean nothing about the word
+    segments = [{"text": "so Okay that is the first thing"}, {"text": "and Okay that is the second"},
+                {"text": "then Okay we can move on"}, {"text": "it was okay in the end"}]
+    assert [s["text"] for s in unify_word_case(segments)][3] == "it was okay in the end"
