@@ -20,6 +20,7 @@ from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUT
                     TASKS, SUBTITLE_FORMATS, MUX_CONTAINERS, DEFAULT_SETTINGS, QUALITY_PRESETS,
                     MEDIA_EXTENSIONS, SYNC_MODES)
 from modules.backends import cuda_available, faster_whisper_available, is_model_cached, model_repo_id
+from modules.model_catalog import catalog_path, load_catalog
 from utils.cuda_utils import cuda_status, download_cuda_libraries, default_cuda_dir
 from PySide6.QtCore import QThread
 from utils.file_utils import format_duration
@@ -395,10 +396,14 @@ class UIManager(QWidget):
         grid = QGridLayout()
         self.controls["model"] = QComboBox()
         self.controls["model"].setEditable(True)
-        self.controls["model"].addItems(MODEL_SIZES)
+        self._model_catalog = load_catalog()
+        self._fill_model_combo(DEFAULT_SETTINGS["engine"])
         self.controls["model"].setCurrentText(DEFAULT_SETTINGS["model"])
+        self.controls["model"].activated.connect(self._on_model_picked)
         self.controls["model"].setToolTip("Model size. *.en models are English-only and a bit faster/more accurate for English.\n"
-                                          "faster-whisper: HuggingFace repo id also accepted.\n"
+                                          "faster-whisper: the entries below the sizes are language fine-tunes from Hugging Face; any\n"
+                                          "other repo id (owner/name) or a folder holding model.bin can be typed in. Edit the list in\n"
+                                          f"{catalog_path()}\n"
                                           "whisper.cpp: size name (looks for ggml-<size>.bin in the model folder) or a full path to a .bin file.")
         grid.addWidget(QLabel("Model:"), 0, 0)
         grid.addWidget(self.controls["model"], 0, 1)
@@ -838,6 +843,8 @@ class UIManager(QWidget):
             "<b>Notes</b><br>"
             "• faster-whisper downloads models from Hugging Face on first use into the model folder "
             "(or ~/.cache/huggingface). large-v3 is ~3 GB, small.en ~0.5 GB.<br>"
+            "• The models listed below the sizes are language fine-tunes; any other CTranslate2 Whisper "
+            f"repo id works too. Edit the list in <i>{html.escape(catalog_path())}</i>.<br>"
             "• whisper.cpp needs GGML models (ggml-small.en.bin …) from "
             "<a href='https://huggingface.co/ggerganov/whisper.cpp/tree/main'>huggingface.co/ggerganov/whisper.cpp</a>.<br>"
             "• Audio is extracted with FFmpeg to 16 kHz mono WAV in a temp folder and deleted afterwards.<br>"
@@ -868,6 +875,7 @@ class UIManager(QWidget):
             self.engine_hint.setText("Python CTranslate2 implementation, bundled with the app. CPU or NVIDIA CUDA. "
                                      "Models are downloaded automatically." if ok else
                                      "faster-whisper is NOT installed: pip install faster-whisper")
+            self._fill_model_combo(engine)
             self._refresh_gpu_status()
             self._refresh_model_cache_label()
             self.engine_status.setText("Engine: faster-whisper ✓" if ok else "Engine: faster-whisper ✗")
@@ -879,6 +887,7 @@ class UIManager(QWidget):
                                      "Set the executable on the Advanced tab and a folder with ggml models above.")
             self.hw_label.setText(f"whisper-cli: {exe or 'not found'} — GPU use depends on how whisper.cpp was built "
                                   "(CUDA / Vulkan / Metal builds use the GPU automatically; Device=cpu passes -ng).")
+            self._fill_model_combo(engine)
             self.model_cache_label.setText("whisper.cpp: put ggml-<model>.bin files into the model folder")
             self.engine_status.setText("Engine: whisper.cpp ✓" if exe else "Engine: whisper.cpp ✗")
             self.engine_status.setStyleSheet("color: green;" if exe else "color: red;")
@@ -942,6 +951,37 @@ class UIManager(QWidget):
         self._cuda_thread.progress.connect(on_progress)
         self._cuda_thread.done.connect(finished)
         self._cuda_thread.start()
+
+    def _fill_model_combo(self, engine: str):
+        """The sizes always; the Hugging Face catalogue only for faster-whisper, which can fetch it"""
+        if "model" not in self.controls:
+            return
+        combo = self.controls["model"]
+        current = combo.currentText()
+        blocked = combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(MODEL_SIZES)
+        if engine == "faster_whisper" and self._model_catalog:
+            combo.insertSeparator(combo.count())
+            for entry in self._model_catalog:
+                combo.addItem(entry["id"])
+                idx = combo.count() - 1
+                combo.setItemData(idx, entry["label"], Qt.ItemDataRole.ToolTipRole)
+                combo.setItemData(idx, entry, Qt.ItemDataRole.UserRole)
+        combo.setCurrentText(current)
+        combo.blockSignals(blocked)
+
+    def _on_model_picked(self, index: int):
+        """A catalogue model that names its language brings the language with it: PhoWhisper
+        decoding as English would be a fine-tune wasted, and the mistake is a silent one"""
+        entry = self.controls["model"].itemData(index, Qt.ItemDataRole.UserRole)
+        if not isinstance(entry, dict):
+            return
+        lang = entry.get("language", "")
+        combo = self.controls["language"]
+        if lang and lang in LANGUAGES and combo.currentData() != lang:
+            self._set_combo_data(combo, lang)
+            self.update_status(f"{entry['label']} — language set to {LANGUAGES[lang]}")
 
     def _refresh_model_cache_label(self, *_):
         if self.controls["engine"].currentData() != "faster_whisper":

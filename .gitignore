@@ -7,3 +7,4 @@ presets/*.json
 *.log
 .venv/
 temp/
+models.json

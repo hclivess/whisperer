@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -27,6 +27,30 @@ MODEL_SIZES = [
 ]
 DEFAULT_MODEL = "small.en"
 
+# faster-whisper loads any CTranslate2 Whisper model from the Hugging Face Hub, not just the sizes
+# above, and a fine-tune of one language usually beats plain Whisper on that language. These are
+# offered below the sizes in the Model dropdown; models.json next to the app overrides the list, so
+# a model that is not here can be added without touching the code.
+MODEL_CATALOG_FILE = "models.json"
+MODEL_CATALOG = [
+    {"id": "kiendt/PhoWhisper-large-ct2",
+     "label": "PhoWhisper large — Vietnamese (VinAI fine-tune)", "language": "vi"},
+    {"id": "distil-whisper/distil-large-v3.5-ct2",
+     "label": "distil-large-v3.5 — English, faster than large-v3", "language": "en"},
+    {"id": "avazir/faster-distil-whisper-large-v3-ru",
+     "label": "distil-large-v3 — Russian fine-tune", "language": "ru"},
+    {"id": "jimmymeister/whisper-large-v3-turbo-german-ct2",
+     "label": "large-v3-turbo — German fine-tune", "language": "de"},
+    {"id": "kotoba-tech/kotoba-whisper-v2.0-faster",
+     "label": "Kotoba-Whisper v2.0 — Japanese", "language": "ja"},
+    {"id": "ivrit-ai/whisper-large-v3-turbo-ct2",
+     "label": "ivrit.ai large-v3-turbo — Hebrew", "language": "he"},
+    {"id": "techiaith/whisper-large-ft-cy-en-ct2",
+     "label": "Whisper large fine-tune — Welsh / English", "language": "cy"},
+    {"id": "SoybeanMilk/faster-whisper-Breeze-ASR-25",
+     "label": "Breeze-ASR-25 — Mandarin, and Mandarin/English code-switching", "language": "zh"},
+]
+
 DEVICES = ["auto", "cpu", "cuda"]
 COMPUTE_TYPES = ["default", "int8", "int8_float16", "float16", "float32"]
 
@@ -39,6 +63,7 @@ LANGUAGES = {
     "ru": "Russian", "sk": "Slovak", "sv": "Swedish", "tr": "Turkish", "uk": "Ukrainian",
     "zh": "Chinese", "ar": "Arabic", "hi": "Hindi", "hu": "Hungarian", "fi": "Finnish",
     "da": "Danish", "no": "Norwegian", "el": "Greek", "ro": "Romanian", "vi": "Vietnamese",
+    "he": "Hebrew", "cy": "Welsh",
 }
 
 SYNC_MODES = {

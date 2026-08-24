@@ -14,7 +14,8 @@ A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress
     models download automatically on first use, built-in VAD silence filter, word timestamps
   - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — drives an external `whisper-cli` binary
     (CPU / CUDA / Vulkan / Metal builds), GGML models
-- All model sizes: `tiny` … `large-v3`, `large-v3-turbo`, `distil-large-v3`, English-only `*.en` variants
+- All model sizes: `tiny` … `large-v3`, `large-v3-turbo`, `distil-large-v3`, English-only `*.en` variants,
+    plus language fine-tunes from Hugging Face in the same dropdown (editable `models.json`)
 - English by default; ~30 languages or auto-detect; *translate to English* task
 - Live queue: add files / folders or drag & drop while a run is in progress, reorder by dragging, pause / resume / stop
 - Live transcript panel — segments appear as they are decoded
@@ -84,9 +85,41 @@ macOS has no CUDA — use whisper.cpp's Metal build there, or faster-whisper on 
 | `large-v3-turbo` | 1.6 GB | best speed/quality on a GPU |
 | `large-v3` | 3 GB | highest accuracy |
 
-Pick the model in the **Model** tab (the dropdown is editable — any faster-whisper Hugging Face repo id such as
-`deepdml/faster-whisper-large-v3-turbo-ct2` works too). *Download / check model* fetches it up front; the label next to it
-shows whether the model is already cached.
+Pick the model in the **Model** tab. *Download / check model* fetches it up front; the label next to it shows
+whether the model is already cached.
+
+### Fine-tuned models
+
+Whisper is multilingual but generic, and a model fine-tuned on one language usually beats it on that language.
+faster-whisper loads any CTranslate2 Whisper model from the Hugging Face Hub, so the dropdown lists a few below
+the sizes — picking one also selects the language it was trained for:
+
+| Model | Language |
+|---|---|
+| `kiendt/PhoWhisper-large-ct2` | Vietnamese (VinAI's PhoWhisper) |
+| `distil-whisper/distil-large-v3.5-ct2` | English, faster than `large-v3` |
+| `avazir/faster-distil-whisper-large-v3-ru` | Russian |
+| `jimmymeister/whisper-large-v3-turbo-german-ct2` | German |
+| `kotoba-tech/kotoba-whisper-v2.0-faster` | Japanese |
+| `ivrit-ai/whisper-large-v3-turbo-ct2` | Hebrew |
+| `techiaith/whisper-large-ft-cy-en-ct2` | Welsh / English |
+| `SoybeanMilk/faster-whisper-Breeze-ASR-25` | Mandarin, incl. Mandarin/English code-switching |
+
+The list is not fixed: it lives in **`models.json` next to the app**, written on first run, and the dropdown is
+still editable, so any other repo id (`owner/name`) or a local folder holding `model.bin` can simply be typed in.
+
+```json
+{
+  "models": [
+    {"id": "kiendt/PhoWhisper-large-ct2", "label": "PhoWhisper large — Vietnamese", "language": "vi"},
+    {"id": "/models/my-own-ct2-model", "label": "My own fine-tune", "language": "cs"}
+  ]
+}
+```
+
+`label` is what the tooltip shows and `language` is optional. The model must be **CTranslate2-converted** — a plain
+PyTorch Whisper checkpoint has to go through `ct2-transformers-converter` first. Repos that ship no `tokenizer.json`
+(PhoWhisper is one) fall back to the standard Whisper tokenizer, which is what they were trained with anyway.
 
 Tips: keep **VAD filter** on (skips silence and prevents hallucinated text in quiet parts), use an
 **initial prompt** to teach the model names and jargon, and turn on **word timestamps** for tighter cue splitting.
@@ -174,6 +207,19 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.8.1
+
+- **Fine-tuned models are in the dropdown now, not just typeable.** faster-whisper has always accepted any
+  CTranslate2 model id, but nothing in the app said so or suggested one, so the feature existed only for people
+  who already knew it existed. Eight language fine-tunes — Vietnamese, Russian, German, Japanese, Hebrew,
+  Welsh, Mandarin and a faster English distil — now sit below the sizes.
+- **Picking one selects its language.** A model fine-tuned for Vietnamese left decoding as English is a
+  fine-tune wasted, and it fails quietly: output still appears, it is just worse than plain Whisper would have
+  been. Hebrew and Welsh were added to the language list for the same reason.
+- **The list is a file, not a hard-coded table.** `models.json` is written next to the app on first run and read
+  at startup; edit it to add your own, and the box stays editable for a one-off repo id or a local folder.
+- The catalogue is offered only under faster-whisper — whisper.cpp reads GGML files and cannot load any of it.
 
 ## Changes in 1.8.0
 
