@@ -340,3 +340,34 @@ def test_an_ordinary_decode_is_not_called_broken():
                 {"text": "and returns before the evening tide unless the weather turns"},
                 {"text": "which happens perhaps twice a winter on that stretch of coast"}]
     assert not _came_apart(ordinary)
+
+
+def test_vocabulary_prompt_rejects_everyday_words():
+    # "You" collects capitals at window boundaries but the transcript writes it lower case
+    # mid-sentence; such a word must not come back as a hotword and teach the next pass to stumble
+    segments = [{"text": "and You know what happens next."}, {"text": "when you look at it, you see."},
+                {"text": "so you can tell that I'm sure of it."}, {"text": "so I'm going to ask Halloran."},
+                {"text": "then Halloran left early."}, {"text": "we saw Halloran again after."},
+                {"text": "it happens when you least expect it."}]
+    prompt = vocabulary_prompt(segments)
+    assert "Halloran" in prompt
+    assert "You" not in prompt.split(", ")
+    assert "I'm" not in prompt.split(", ")
+
+
+def test_wording_note_ignores_a_pass_that_came_apart():
+    from utils.verify_utils import resolve_passes
+    # base and a healthy second pass agree in ordinary prose; a third decode collapsed into
+    # Title Case throughout - its wording is known noise and must not spam the review list
+    texts = ["we walked along the river bank", "the water was very cold that day",
+             "nobody wanted to swim anymore", "so we turned around and went home"]
+    base = [seg(i * 2.0, i * 2.0 + 1.9, t) for i, t in enumerate(texts)]
+    healthy = [seg(i * 2.0, i * 2.0 + 1.9, t) for i, t in enumerate(texts)]
+    apart = [seg(i * 2.0, i * 2.0 + 1.9, ", ".join(w.capitalize() for w in t.split()) + ",")
+             for i, t in enumerate(texts)]
+    regions = [(i * 2.0, i * 2.0 + 1.9) for i in range(len(texts))]
+    out, report, unresolved = resolve_passes(
+        [{"segments": base, "covers": None}, {"segments": healthy, "covers": None},
+         {"segments": apart, "covers": None}], regions)
+    assert [s["text"] for s in out] == texts
+    assert not any(n["why"] == "the passes agreed but worded it differently" for n in report["review"])

@@ -148,7 +148,32 @@ def _proper_nouns(segments: List[Dict]) -> set:
     return proper
 
 
-def _pauses(segments: List[Dict], i: int) -> Optional[List[Optional[float]]]:
+def _silence(a: float, b: float, regions) -> float:
+    """
+    Seconds of the interval [a, b] the voice-activity detector heard no speech in.
+
+    The decoder's word timestamps are guesses and in a decode that has come apart they lie - a claimed
+    gap of half a second routinely sits over continuous speech. The VAD listened to the audio, so where
+    its regions are available the pause is measured against them instead of taken on the decoder's word.
+    """
+    if b <= a:
+        return 0.0
+    silence = b - a
+    for s, e in regions:
+        if e <= a:
+            continue
+        if s >= b:
+            break
+        silence -= min(e, b) - max(s, a)
+    return max(0.0, silence)
+
+
+def _pause_between(end: float, start: float, regions) -> float:
+    """The pause between two words: the claimed gap, or the audible silence in it when a VAD listened."""
+    return _silence(end, start, regions) if regions is not None else start - end
+
+
+def _pauses(segments: List[Dict], i: int, regions=None) -> Optional[List[Optional[float]]]:
     """
     Silence after each full stop of segment i, in text order, or None when it cannot be measured.
 
@@ -163,12 +188,12 @@ def _pauses(segments: List[Dict], i: int) -> Optional[List[Optional[float]]]:
         if not w["word"].strip().endswith("."):
             continue
         if k + 1 < len(words):
-            out.append(words[k + 1]["start"] - w["end"])
+            out.append(_pause_between(w["end"], words[k + 1]["start"], regions))
         else:                                   # last word: the pause runs into the next segment
             nxt = segments[i + 1] if i + 1 < len(segments) else None
             nxt_words = (nxt.get("words") if nxt else None) or []
             start = nxt_words[0]["start"] if nxt_words else (nxt["start"] if nxt else None)
-            out.append(None if start is None else start - w["end"])
+            out.append(None if start is None else _pause_between(w["end"], start, regions))
     return out if len(out) == len(_DOT.findall(segments[i].get("text", ""))) else None
 
 
@@ -178,12 +203,14 @@ def _spurious(text: str, pos: int, pause: Optional[float], min_pause: float) -> 
         return False
     before = text[:pos].split()
     word = before[-1].lower().strip("\"'([{)]}") if before else ""
+    if len(word) > 1 and word in _CANNOT_END_SENTENCE:
+        return True                                        # "the." / "an.": no pause makes it a sentence
     if len(word) == 1 or word in _ABBREVIATIONS or "." in word[:-1]:   # "J. R. R." / "Dr." / "U.S."
         return False
     if word[-1:].isdigit():                                # "3." of a decimal or a list number
         return False
     if pause is None:
-        return word in _CANNOT_END_SENTENCE
+        return False
     return pause < min_pause
 
 
@@ -198,7 +225,20 @@ def _lower_first(text: str, proper: set) -> str:
     return text[:m.start(2)] + m.group(2).lower() + text[m.end(2):]
 
 
-def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> List[Dict]:
+def _lower_token(token: str) -> str:
+    """The word-token form of _lower_first: same letter, decision already made on the text."""
+    m = _FIRST_LETTER.match(token)
+    if not m or not m.group(2).isupper():
+        return token
+    return token[:m.start(2)] + m.group(2).lower() + token[m.end(2):]
+
+
+def _same_word(token: str, text_word: str) -> bool:
+    """Does this word token spell the given word of the text (case-insensitively)?"""
+    return token.strip().lower() == text_word.strip().lower()
+
+
+def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25, regions=None) -> List[Dict]:
     """
     Remove full stops the speaker never made.
 
@@ -208,6 +248,10 @@ def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> Lis
     than `min_pause` of silence around it is the model's invention: it is dropped and the next word goes back to
     lower case (names and "I" keep their capital). Without word timestamps only full stops after a word that
     cannot end a sentence ("of.", "the.", "and.") are removed.
+
+    When VAD speech regions are given, the pause is the audible silence in the gap rather than the gap the
+    word timestamps claim: a decode that has come apart writes one-word sentences with half-second gaps
+    over continuous speech, and trusting those gaps left every invented full stop standing.
     """
     if not segments or min_pause <= 0:
         return segments
@@ -215,7 +259,7 @@ def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> Lis
     proper = _proper_nouns(out)
     for i, seg in enumerate(out):
         text = seg.get("text", "")
-        pauses = _pauses(out, i)
+        pauses = _pauses(out, i, regions)
         positions = [m.start() for m in _DOT.finditer(text)]
         # the k-th full stop of the text is the k-th word token ending in "." - keep both in step
         dot_tokens = [k for k, w in enumerate(seg.get("words") or []) if w["word"].strip().endswith(".")]
@@ -227,12 +271,29 @@ def repair_sentence_breaks(segments: List[Dict], min_pause: float = 0.25) -> Lis
                 continue
             head, tail = text[:pos], text[pos + 1:]
             if tail.strip():                               # the sentence continues inside this cue
-                text = head + tail[:len(tail) - len(tail.lstrip())] + _lower_first(tail.lstrip(), proper)
+                stripped = tail.lstrip()
+                lowered = _lower_first(stripped, proper)
+                text = head + tail[:len(tail) - len(stripped)] + lowered
+                # keep the words in step with the text: a capital lowered in one but not the other
+                # desyncs them, which silences every later word-level repair on this segment and
+                # resurrects the capital whenever the text is rebuilt from the words
+                if aligned and lowered != stripped and dot_tokens[k] + 1 < len(seg.get("words") or []):
+                    words = words if words is not None else [dict(w) for w in seg["words"]]
+                    follow = words[dot_tokens[k] + 1]
+                    if _same_word(follow["word"], stripped.split()[0]):
+                        follow["word"] = _lower_token(follow["word"])
             elif i + 1 < len(out) and pauses:               # ... or in the next one, but only on measured silence
-                out[i + 1] = {**out[i + 1], "text": _lower_first(out[i + 1].get("text", ""), proper)}
+                nxt_text = out[i + 1].get("text", "")
+                lowered = _lower_first(nxt_text, proper)
+                nxt = {**out[i + 1], "text": lowered}
+                nxt_words = nxt.get("words") or []
+                if lowered != nxt_text and nxt_words and nxt_text.split() \
+                        and _same_word(nxt_words[0]["word"], nxt_text.split()[0]):
+                    nxt_words = [dict(w) for w in nxt_words]
+                    nxt_words[0]["word"] = _lower_token(nxt_words[0]["word"])
+                    nxt["words"] = nxt_words
+                out[i + 1] = nxt
                 text = head
-            else:
-                continue
             if aligned:
                 words = words if words is not None else [dict(w) for w in seg["words"]]
                 t = words[dot_tokens[k]]["word"]
@@ -357,7 +418,7 @@ def _stands_alone(prev_token: str, nxt: Optional[Tuple[int, int, Dict, bool]]) -
 
 
 def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
-                           sentence_pause: float = 0.0) -> List[Dict]:
+                           sentence_pause: float = 0.0, regions=None) -> List[Dict]:
     """
     Settle every capital that has no full stop in front of it.
 
@@ -412,7 +473,7 @@ def repair_sentence_starts(segments: List[Dict], min_pause: float = 0.25,
         prev_token = prev["word"].strip()
         if _SENTENCE_END.search(prev_token):
             continue                                   # the sentence is already closed: nothing to settle
-        pause = float(word["start"]) - float(prev["end"])
+        pause = _pause_between(float(prev["end"]), float(word["start"]), regions)
         prev_core = prev_token.strip("\"'([{)]}").lower()
         # no full stop over a comma, or after "to" / "the" / "and", which a sentence does not end on
         can_close = (prev_editable and not _TRAILING_PUNCT.search(prev_token)
@@ -609,7 +670,7 @@ def drop_looped_text(segments: List[Dict], impossible: float = IMPOSSIBLE_RATE,
         duration = float(seg["end"]) - float(seg["start"])
         tokens = _tokens(text)
         aligned = bool(words) and _clean("".join(w["word"] for w in words)) == _clean(text)
-        if duration <= 0 or not tokens or len(tokens) / duration <= impossible or not aligned:
+        if duration <= 0 or not tokens or not aligned:
             out.append(seg)
             continue
         # map every token back to the word it came from - a contraction is one word and two tokens, so
@@ -627,6 +688,19 @@ def drop_looped_text(segments: List[Dict], impossible: float = IMPOSSIBLE_RATE,
             out.append(seg)
             continue
         start, length, covered = found
+        if len(tokens) / duration <= impossible:
+            # the cue as a whole speaks at a human rate - but a loop inside a long segment is
+            # invisible to that measure, so the looped words are also held to it by their own
+            # timestamps: a speaker repeating himself takes the time to, a loop does not
+            w_first = next((i for i, (a, b) in enumerate(spans) if a <= start < b), None)
+            w_last = next((i for i, (a, b) in enumerate(spans) if a < start + covered <= b), None)
+            if w_first is None or w_last is None:
+                out.append(seg)
+                continue
+            local = float(words[w_last]["end"]) - float(words[w_first]["start"])
+            if local <= 0 or covered / local <= impossible:
+                out.append(seg)
+                continue
         cut_from, cut_to = start + length, start + covered
         first = next((i for i, (a, b) in enumerate(spans) if a == cut_from), None)
         last = next((i for i, (a, b) in enumerate(spans) if b == cut_to), None)
@@ -868,18 +942,21 @@ def wrap_lines(text: str, max_line_chars: int, max_lines: int) -> str:
     # The line length is the hard limit, the line count is the target: text that does not fit max_lines
     # takes another line instead of being crammed into over-wide ones. Cues out of split_segments always
     # fit; merged cues and imported (resynced) ones are what can need the extra line.
+    # a single word longer than the limit cannot be broken; only such a word may ever exceed it
+    longest = max((len(w) for w in text.split()), default=0)
+    limit = max(max_line_chars, longest)
     needed = -(-len(text) // max_line_chars)      # max_lines (unused here) is the target
-    # start from an even split and widen until the text fits in `needed` lines
-    width = max(1, -(-len(text) // needed))
-    while True:
-        lines = textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False)
-        if len(lines) <= needed and all(len(l) <= max(width, max_line_chars) for l in lines):
-            break
-        width += 1
-        if width > len(text):
-            lines = [text]
-            break
-    return "\n".join(lines)
+    while needed <= len(text):
+        # start from an even split and widen towards the limit until the text fits in `needed` lines;
+        # if no width within the limit fits, the text takes another line - never a wider one
+        width = max(1, -(-len(text) // needed))
+        while width <= limit:
+            lines = textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False)
+            if len(lines) <= needed and all(len(l) <= limit for l in lines):
+                return "\n".join(lines)
+            width += 1
+        needed += 1
+    return text
 
 
 def to_srt(segments: List[Dict], max_line_chars: int, max_lines: int) -> str:

@@ -23,7 +23,8 @@ Region = Tuple[float, float]
 
 # Two decodes of the same span that reproduce each other this well said the same sentence, punctuation and
 # hesitations aside. Below it they genuinely disagree about the words.
-AGREE = 0.6
+AGREE = 0.7                 # of the symmetric, per-territory token ratio: one word in three
+                            # differing is a disagreement, one in five is the same reading
 # How much of a span the VAD must find speech in before text over it is believable (used for scoring).
 MIN_SPEECH = 0.35
 # What the VAD has to find before it may vote a cue away: near enough to nothing, by both measures. A long
@@ -269,6 +270,7 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                  "segments": d.get("segments") or [],
                  "apart": _came_apart(d.get("segments") or [])} for d in others]
     base_apart = _came_apart(first)
+    base_words = _words(first)
     territories = _territories(first)
     out: List[Dict] = []
     unresolved: List[Region] = []
@@ -282,7 +284,15 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             continue
         report["checked"] += 1
 
-        candidates = [{"tokens": _tokens(seg.get("text", "")), "seg": seg, "words": None,
+        # every candidate - the base included - is compared on the cue's territory, the same stretch of
+        # audio for all of them. The padded span decides only whether a pass heard anything here at all:
+        # comparing on it handicapped the base (its own text has no padding to bring) and diluted real
+        # disagreement on short cues with neighbour words every pass renders identically
+        terr = territories[index]
+        base_terr = _inside(base_words, *terr)
+        candidates = [{"tokens": ([t for w in base_terr for t in w["toks"]]
+                                  if base_terr else _tokens(seg.get("text", ""))),
+                       "seg": seg, "words": None,
                        "pass": None, "base": True, "text": seg.get("text", "")}]
         empty_votes = 0
         for p in voters:
@@ -290,11 +300,13 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
             if not words:
                 empty_votes += 1
                 continue
-            candidates.append({"tokens": [t for w in words for t in w["toks"]], "words": words, "base": False,
+            owned = _inside(p["words"], *terr)
+            candidates.append({"tokens": [t for w in (owned or words) for t in w["toks"]],
+                               "words": words, "base": False,
                                "seg": _nearest_segment(p["segments"], start, end), "pass": p,
-                               # compared on the padded span, but shown as what belongs to this cue: a
-                               # review line must not seem to hold a word from the cue next door
-                               "text": _text_of(_inside(p["words"], *territories[index]))})
+                               # shown as what belongs to this cue: a review line must not seem to
+                               # hold a word from the cue next door
+                               "text": _text_of(owned)})
         if speech is not None and speech < SILENT_FRACTION and speech * (end - start) < SILENT_SECONDS:
             empty_votes += 1                      # the VAD gets a vote, and it can only vote for silence
 
@@ -333,7 +345,8 @@ def resolve_passes(decodes: List[Dict], regions: Optional[Sequence[Region]] = No
                 # interesting part, even when the others agree and the cue is settled
                 furthest = min((difflib.SequenceMatcher(None, candidates[0]["tokens"], c["tokens"],
                                                         autojunk=False).ratio()
-                                for c in candidates[1:] if _seen_whole(c, territories[index])), default=1.0)
+                                for c in candidates[1:] if _seen_whole(c, territories[index])
+                                and not (c.get("pass") and c["pass"]["apart"])), default=1.0)
                 if furthest < WORDING:
                     _note(report, start, end, "the passes agreed but worded it differently",
                           seg.get("text", ""), candidates)
@@ -500,11 +513,20 @@ def vocabulary_prompt(segments: Sequence[Dict], base: str = "", limit: int = 30,
     Whisper spells an unfamiliar name differently every time it meets it; handing back the spellings it
     settled on makes the later decodes consistent with it. A word qualifies when it was capitalised in
     mid-sentence at least once - which a plain sentence start never is - and turns up more than once.
+
+    The transcript's own habits veto a candidate: a word it mostly writes in lower case ("You", "The",
+    "Now") is not a name however many capitals it collects at window boundaries - handing such words
+    back as hotwords only teaches the next pass to make the same mistake, everywhere. Title-Cased
+    stretches and utterance openers are ignored for the same reasons the case-unifier ignores them.
     """
+    from utils.subtitle_utils import _I_FORMS, _NEVER_A_NAME, _case_profile, _mostly_lower, _title_cased
+    profile = _case_profile(list(segments))
     counts: Dict[str, int] = {}
     mid_sentence = set()
     for seg in segments:
         words = seg.get("text", "").split()
+        if _title_cased(words):
+            continue                    # a decode gone to Title Case is not evidence about any word
         sentence_start = True
         for w in words:
             core = w.strip("\"'([{)]}").rstrip(",;:.!?…")
@@ -514,7 +536,9 @@ def vocabulary_prompt(segments: Sequence[Dict], base: str = "", limit: int = 30,
                     mid_sentence.add(core)
             sentence_start = bool(core[-1:] in ".!?…")
     names = [w for w, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-             if n > 1 and w in mid_sentence][:limit]
+             if n > 1 and w in mid_sentence
+             and w.lower() not in _NEVER_A_NAME and w.lower() not in _I_FORMS
+             and not _mostly_lower(profile, w)][:limit]
     if not names:
         return base
     listing = ", ".join(names)

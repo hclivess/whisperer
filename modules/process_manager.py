@@ -180,7 +180,9 @@ class _Worker(QThread):
 
             self.file_state.emit(index, "processing", "")
             seg_count = [0]
-            t0 = time.time()
+            file_t0 = time.time()
+            t0 = [file_t0]                    # reset at each pass: a pass starts its position over at zero,
+            t0_phase = [0]                    # and speed measured from the file start understates every later one
             wanted = max(1, min(5, int(s.get("passes", 2))))
             verify = wanted > 1 and s.get("sync_mode") != "resync"
             phase = [0]                       # which decode we are in, when the file is transcribed twice
@@ -191,13 +193,16 @@ class _Worker(QThread):
                 if total_len:
                     frac = min(1.0, max(0.0, done / total_len))
                     self.file_progress.emit(int((phase[0] + frac) / phases * 1000))
-                elapsed = time.time() - t0
+                if phase[0] != t0_phase[0]:
+                    t0_phase[0] = phase[0]
+                    t0[0] = time.time()
+                elapsed = time.time() - t0[0]
                 speed = done / elapsed if elapsed > 0 else 0
                 remaining = (total_len - done) / speed if speed > 0 and total_len else None
                 self.stats.emit({
                     "speed": speed, "position": done, "duration": total_len,
                     "segments": seg_count[0], "file_eta": remaining,
-                    "file_elapsed": elapsed,
+                    "file_elapsed": time.time() - file_t0,
                     "total_elapsed": time.time() - run_start,
                 })
                 self._emit_overall(index, done, total_len)
@@ -315,13 +320,18 @@ class _Worker(QThread):
                         meta["dense_cues"] = [round(float(x["start"]), 2) for x in dense[:20]]
                         self.status.emit(f"{len(dense)} cue(s) hold more words than their span can carry — "
                                          f"first at {dense[0]['start']:.0f}s")
+                if regions is None and (s.get("repair_sentence_breaks", True) or s.get("repair_sentence_starts", True)):
+                    # the repairs measure pauses; the VAD heard the audio, the word timestamps only guess at it
+                    regions = speech_regions(audio_for_engine)
                 if s.get("repair_sentence_breaks", True):
                     # before splitting and snapping: the cue text is still Whisper's own, word for word
-                    segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
+                    segments = repair_sentence_breaks(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0,
+                                                      regions=regions)
                 if s.get("repair_sentence_starts", True):
                     # the other half of the same idea: a capital with no full stop in front of it is either
                     # a sentence Whisper forgot to close or one it started at a window boundary
-                    segments = repair_sentence_starts(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0)
+                    segments = repair_sentence_starts(segments, int(s.get("sentence_pause_ms", 250)) / 1000.0,
+                                                      regions=regions)
                 if s.get("unify_word_case", True):
                     # Whisper writes "Halloran" in one window and "halloran" in the next; nothing in the
                     # audio decides which is right, so the rest of the file does

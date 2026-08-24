@@ -175,6 +175,69 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.8.0
+
+Found by transcribing twelve hour-long lecture recordings end to end with the ordinary defaults and
+reading the results file by file; every change was validated by replaying the captured raw decodes of
+every previously processed file through the changed code, plus the test suite, before moving to the next.
+
+- **A repaired capital stays repaired.** When a false sentence break was removed, the word after it was
+  lowered in the cue's text but not in its word list. The moment anything downstream rebuilt the text
+  from the words - splitting does - the capital and the break came back; worse, the text/word mismatch
+  marked the segment untouchable for every later word-level repair, silently switching them off for
+  exactly the cues that needed them. The case change is now mirrored into the word token, under a guard
+  that the token really is the word the text lowered. On one lecture this settled a third of the stray
+  capitals on its own.
+
+- **Pauses are measured against the audio, not the decoder's claims.** Both sentence repairs decide by
+  the pause around a full stop or a capital, taken from the word timestamps - and in a stretch where the
+  decode has come apart those timestamps lie, writing one-word sentences with half-second gaps over
+  continuous speech. Every invented full stop then survived on the evidence of its own invented timing.
+  When the VAD's speech regions are available the pause is now the audible silence in the gap: a claimed
+  pause the VAD heard speech through counts as no pause. A lecture section that read
+  *"harmonious interplay Of. Multiple. Patterns right."* comes out as prose again.
+
+- **No pause makes "the." a sentence.** A full stop after "the" / "an" survived whenever the speaker
+  genuinely paused there for emphasis, which speakers do constantly. The article veto now outranks the
+  pause everywhere, not only in the no-timestamps fallback.
+
+- **Hotwords learn names, not habits.** The vocabulary the first pass hands to the later ones accepted
+  any word capitalised once in mid-sentence and seen twice - which let "The", "And", "You" through on
+  ordinary decode stumbles. Fed back as hotwords they taught the later passes a style, and both
+  verification passes of an hour-long file came apart into comma-separated Title Case identically; the
+  1.7.6 guard kept the wreckage out of the file, but the passes bought no verification. A candidate is
+  now vetoed by the transcript's own habits - a word the file mostly writes in lower case is not a name,
+  and utterance openers and I-contractions never qualify - the same evidence standard the case unifier
+  already applies. On the same file the learned list went from "The, And, That's, You, It's, ..." to
+  "Husserl, Heidegger, Aries, Eve, Freud, Nietzsche", and the later passes stayed prose.
+
+- **Every pass is compared on the same ground.** Candidates were compared over a padded span (the passes
+  cut segments in different places), but the transcript's own cue brought only its unpadded text to that
+  comparison. On short cues the handicap outweighed the wording: identical healthy passes could score as
+  "worded differently", and a real one-word disagreement drowned in neighbour words every pass renders
+  the same. All candidates, the base included, are now compared on the cue's territory - the same
+  non-overlapping stretch used for replacement text - and the agreement bar is recalibrated for the
+  symmetric measure (one word in three differing is a disagreement, one in five is the same reading).
+  First lecture: cues settled by agreement rose from 1594 to 1748 of 1864, unresolved fell from 7 to 5.
+
+- **A pass that came apart no longer floods the review list.** Its text was already barred from the
+  file; it is now also left out of the "worded differently" comparison, so the review list holds real
+  disagreements instead of one Title-Case line per cue.
+
+- **The line length limit is hard again.** Balancing a cue's text over its lines widened them past *Max
+  line length* whenever no word-boundary split fit the line count - a 45-character line under a
+  42-character limit, on any awkward two-line cue. The text now takes another line instead, which is
+  what the merge logic already promised; only a single word longer than the limit itself may ever
+  exceed it.
+
+- **A loop inside a long segment is caught.** The repetition folding of 1.7.12 gated on the cue's
+  overall rate, so a one-second loop hiding in a thirty-second segment passed as human speech. The
+  looped words are now also held to the impossible-rate bar by their own timestamps; a speaker's
+  repetition at speaking speed stays untouched either way.
+
+- **Speed and ETA are per pass.** Each pass starts its position over at zero, but the clock did not, so
+  every pass after the first reported a fraction of its real speed.
+
 ## Changes in 1.7.12
 
 - **A phrase the decoder repeated faster than speech is folded down to one copy.** This is the hallucination
