@@ -150,11 +150,17 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 | Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
 
 Resync reads **SRT, WebVTT, ASS/SSA and MicroDVD**, recognised by content rather than by extension, so a
-mislabelled file still opens. MicroDVD counts frames: the rate it declares on its first line wins, the video's
+mislabelled file still opens. An ASS or MicroDVD file keeps its own styling — only its timings are rewritten. MicroDVD counts frames: the rate it declares on its first line wins, the video's
 own rate is used when it declares none, and 25 stands in when neither is available — a wrong rate is a constant
-ratio error, which is exactly what the speed fit corrects. **Styling is not carried over**: resync rewrites the
-words' timing, and the output is written in the formats ticked on the Subtitles tab, so an ASS in means a plain
-ASS (or SRT) out, without the original's positioning, fonts or karaoke.
+ratio error, which is exactly what the speed fit corrects.
+
+**A styled file keeps its styling.** With *Keep an ASS/MicroDVD file's own styling and layout* on (Sync tab,
+the default), the file you gave it comes back with only its timestamps changed — `movie.synced.ass`, byte for
+byte identical everywhere else: styles, `\pos`, `\fad`, karaoke, comments, script headers. Its cue layout is
+its own, so the pass that joins cues too short to read is not run on it: that pass changes the cue count, and
+a changed count leaves no honest mapping back to the original's lines. If something else changes the count
+anyway, the log says so and the ticked formats carry the new timings instead. Turn the setting off to
+regenerate the file in the ticked formats, which loses the styling.
 
 Resync picks `movie.srt` / `movie.vtt` / `movie.ass` / `movie.sub` next to the video unless you choose a file. A file that does not match the
 audio (wrong language, different cut) is rejected with an explanation rather than guessed at.
@@ -234,6 +240,21 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
 
+## Changes in 1.8.4
+
+- **Resyncing an ASS or MicroDVD file no longer costs it its styling.** 1.8.3 could read those formats but
+  regenerated the output from the cues, so an ASS came back as plain text in whisperer's default style —
+  positioning, fonts, karaoke and comments gone. The original file is now rewritten in place: the two
+  timestamps on each `Dialogue:` line change and nothing else does, so what comes out is byte for byte the
+  file that went in, with the timing corrected.
+- The mapping from cue back to line is the part that has to be right: events are matched in the order the
+  parser produced them, which is by start time, so a file whose lines are out of chronological order still
+  retimes correctly. A `Comment:` line is not a subtitle and keeps its own timing. MicroDVD is rewritten at
+  the rate the file declares, since new frame numbers written at another rate would move every cue.
+- **The cue-joining pass is skipped for a file being retimed in place**, because it changes the cue count and
+  the mapping depends on that count. If anything else changes it, the retimed file is not written, the log
+  says why, and the formats ticked on the Subtitles tab carry the new timings.
+
 ## Changes in 1.8.3
 
 - **Resync reads ASS/SSA and MicroDVD too.** 1.8.2 started writing both and could not read either back, which
@@ -246,10 +267,7 @@ GitHub Actions and attach them to the release.
 - MicroDVD needs a frame rate to mean anything: the file's own declaration wins, the video's probed rate stands
   in, and 25 is the last resort. Since a wrong rate is a constant ratio over the whole file, the speed fit is
   what corrects it — that is the 23.976 ↔ 25 case resync already existed for.
-- **Styling is not carried over.** Resync rewrites timing and writes the formats ticked on the Subtitles tab, so
-  an ASS keeps its words and loses its positioning and fonts. Retiming a file in place, keeping everything else
-  byte for byte, is a separate job — the merge and minimum-duration passes change the cue count, and that has to
-  be handled deliberately rather than as a side effect.
+- **Styling was not carried over** in this version; 1.8.4 fixes that by rewriting the original file in place.
 - Auto-discovery next to the video and the file dialog cover all four formats; a `.synced.` file from an earlier
   run is never picked up, whatever its extension.
 
