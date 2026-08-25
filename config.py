@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -73,10 +73,26 @@ SYNC_MODES = {
 
 TASKS = {"transcribe": "Transcribe (same language)", "translate": "Translate to English"}
 
-SUBTITLE_FORMATS = ["srt", "vtt", "txt", "json"]
+# srt is the default; ass carries styling, sub (MicroDVD) counts frames rather than seconds
+SUBTITLE_FORMATS = ["srt", "vtt", "ass", "sub", "txt", "json"]
 
 # Containers that can carry a soft subtitle track, with the codec to use
 MUX_CONTAINERS = {"mkv": "srt", "mp4": "mov_text"}
+
+# What comes out at the end. The subtitle files are written either way; the video is extra work
+# on top, and hardcoding is the only one that survives a player which can display no subtitles.
+DELIVERY_MODES = {
+    "file": "Subtitle file",
+    "embed": "Embed in the video — soft track, no re-encode",
+    "hardcode": "Hardcode into the video — burned into the picture, re-encodes",
+}
+
+# Hardcoding quality: label, x264 CRF (lower is better and larger), x264 preset (slower is smaller)
+HARDCODE_QUALITY = {
+    "high": ("High — bigger file, slower", 18, "slow"),
+    "balanced": ("Balanced", 20, "medium"),
+    "small": ("Smaller file, faster", 24, "fast"),
+}
 
 DEFAULT_SETTINGS = {
     # Engine / model
@@ -129,8 +145,9 @@ DEFAULT_SETTINGS = {
     "suffix": "",
     "language_suffix": True,        # file.en.srt
     "overwrite": False,
-    "mux_subtitles": False,
+    "delivery": "file",             # file | embed | hardcode
     "mux_container": "mkv",
+    "hardcode_quality": "balanced",
 }
 
 # Suggested quality presets (menu)

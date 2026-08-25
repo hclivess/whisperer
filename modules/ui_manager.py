@@ -18,7 +18,7 @@ from PySide6.QtCore import QUrl
 
 from config import (APP_NAME, APP_VERSION, ENGINES, MODEL_SIZES, DEVICES, COMPUTE_TYPES, LANGUAGES,
                     TASKS, SUBTITLE_FORMATS, MUX_CONTAINERS, DEFAULT_SETTINGS, QUALITY_PRESETS,
-                    MEDIA_EXTENSIONS, SYNC_MODES)
+                    MEDIA_EXTENSIONS, SYNC_MODES, DELIVERY_MODES, HARDCODE_QUALITY)
 from modules.backends import cuda_available, faster_whisper_available, is_model_cached, model_repo_id
 from modules.model_catalog import catalog_path, load_catalog
 from utils.cuda_utils import cuda_status, download_cuda_libraries, default_cuda_dir
@@ -674,7 +674,40 @@ class UIManager(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
 
-        fmt_group = QGroupBox("Output formats")
+        deliver_group = QGroupBox("Deliver as")
+        dg = QGridLayout()
+        self.controls["delivery"] = QComboBox()
+        for key, label in DELIVERY_MODES.items():
+            self.controls["delivery"].addItem(label, key)
+        self.controls["delivery"].currentIndexChanged.connect(self._on_delivery_changed)
+        dg.addWidget(QLabel("Output:"), 0, 0)
+        dg.addWidget(self.controls["delivery"], 0, 1)
+        self.video_out_widget = QWidget()
+        vl = QHBoxLayout(self.video_out_widget)
+        vl.setContentsMargins(0, 0, 0, 0)
+        self.controls["mux_container"] = QComboBox()
+        self.controls["mux_container"].addItems(list(MUX_CONTAINERS.keys()))
+        vl.addWidget(QLabel("Container:"))
+        vl.addWidget(self.controls["mux_container"])
+        self.hardcode_quality_label = QLabel("Quality:")
+        self.controls["hardcode_quality"] = QComboBox()
+        for key, (label, crf, preset) in HARDCODE_QUALITY.items():
+            self.controls["hardcode_quality"].addItem(f"{label} (CRF {crf}, {preset})", key)
+        self._set_combo_data(self.controls["hardcode_quality"], DEFAULT_SETTINGS["hardcode_quality"])
+        self.controls["hardcode_quality"].setToolTip("x264 quality for the re-encode. Lower CRF is better and bigger; "
+                                                     "a slower preset is smaller for the same quality.")
+        vl.addWidget(self.hardcode_quality_label)
+        vl.addWidget(self.controls["hardcode_quality"])
+        vl.addStretch()
+        dg.addWidget(self.video_out_widget, 1, 0, 1, 2)
+        self.delivery_hint = QLabel("")
+        self.delivery_hint.setWordWrap(True)
+        self.delivery_hint.setStyleSheet("color: #666; font-size: 11px;")
+        dg.addWidget(self.delivery_hint, 2, 0, 1, 2)
+        deliver_group.setLayout(dg)
+        layout.addWidget(deliver_group)
+
+        fmt_group = QGroupBox("Subtitle files")
         fl = QHBoxLayout()
         self.format_checks = {}
         for fmt in SUBTITLE_FORMATS:
@@ -808,19 +841,25 @@ class UIManager(QWidget):
         out_group.setLayout(og)
         layout.addWidget(out_group)
 
-        mux_group = QGroupBox("Embed into video (stream copy, no re-encode)")
-        ml = QHBoxLayout()
-        self.controls["mux_subtitles"] = QCheckBox("Write a copy of the video with a soft subtitle track")
-        ml.addWidget(self.controls["mux_subtitles"])
-        self.controls["mux_container"] = QComboBox()
-        self.controls["mux_container"].addItems(list(MUX_CONTAINERS.keys()))
-        ml.addWidget(QLabel("Container:"))
-        ml.addWidget(self.controls["mux_container"])
-        ml.addStretch()
-        mux_group.setLayout(ml)
-        layout.addWidget(mux_group)
         layout.addStretch()
+        self._on_delivery_changed()
         return tab
+
+    def _on_delivery_changed(self, *_):
+        """The container and quality only mean something when a video is being written"""
+        mode = self.controls["delivery"].currentData()
+        self.video_out_widget.setVisible(mode in ("embed", "hardcode"))
+        for w in (self.hardcode_quality_label, self.controls["hardcode_quality"]):
+            w.setVisible(mode == "hardcode")
+        self.delivery_hint.setText({
+            "file": "Subtitle files only — the formats ticked below, next to the video.",
+            "embed": "A copy of the video with the subtitles as a track the player can switch on or off. "
+                     "The streams are copied, so this is quick and loses no quality. MP4 players are pickier "
+                     "about subtitle tracks than MKV ones.",
+            "hardcode": "The subtitles are drawn into the picture and cannot be turned off. The video is "
+                        "re-encoded, which takes roughly as long as the film itself and costs some quality — "
+                        "worth it only for players and sites that show no subtitle tracks at all.",
+        }.get(mode, ""))
 
     def _create_advanced_tab(self):
         tab = QWidget()
@@ -1316,8 +1355,9 @@ class UIManager(QWidget):
             "suffix": c["suffix"].text().strip(),
             "language_suffix": c["language_suffix"].isChecked(),
             "overwrite": c["overwrite"].isChecked(),
-            "mux_subtitles": c["mux_subtitles"].isChecked(),
+            "delivery": c["delivery"].currentData(),
             "mux_container": c["mux_container"].currentText(),
+            "hardcode_quality": c["hardcode_quality"].currentData(),
         }
 
     @staticmethod
@@ -1335,12 +1375,15 @@ class UIManager(QWidget):
             combo.setCurrentText(str(text))
 
     def apply_settings(self, s: Dict[str, Any]):
+        if "delivery" not in s and "mux_subtitles" in s:
+            # presets and settings written before 1.8.2 carried a checkbox instead of the dropdown
+            s = dict(s, delivery="embed" if s["mux_subtitles"] else "file")
         c = self.controls
         for key, val in s.items():
             if key == "formats":
                 for f, cb in self.format_checks.items():
                     cb.setChecked(f in val)
-            elif key in ("engine", "language", "task", "output_mode", "sync_mode"):
+            elif key in ("engine", "language", "task", "output_mode", "sync_mode", "delivery", "hardcode_quality"):
                 self._set_combo_data(c[key], val)
             elif key in ("model", "device", "compute_type", "mux_container"):
                 self._set_combo_text(c[key], val)
@@ -1374,6 +1417,9 @@ class UIManager(QWidget):
             elif isinstance(default, list):
                 val = list(val) if isinstance(val, (list, tuple)) else ([val] if val else [])
             s[key] = val
+        if "delivery" not in s and qsettings.contains("mux_subtitles"):
+            legacy = str(qsettings.value("mux_subtitles")).lower() in ("true", "1", "yes")
+            s["delivery"] = "embed" if legacy else "file"
         if s:
             self.apply_settings(s)
         geo = qsettings.value("window_geometry")

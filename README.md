@@ -1,8 +1,9 @@
 # whisperer
 
 Batch **subtitle generator** GUI for video and audio files, powered by OpenAI Whisper models.
-Drop files in, pick a model, press *Start* — `.srt` / `.vtt` / `.txt` / `.json` subtitles are written next to
-your videos, optionally embedded into a copy of the video as a soft subtitle track.
+Drop files in, pick a model, press *Start* — `.srt` / `.vtt` / `.ass` / `.sub` / `.txt` / `.json` subtitles are
+written next to your videos, or put into the video itself: as a soft track a player can switch off, or burned
+into the picture.
 A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress / presets workflow) built for speech-to-text.
 
 ![thumb](thumb.png)
@@ -31,7 +32,9 @@ A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress
 - Subtitle layout control: max characters per line, max lines per cue, max cue duration — long segments are re-split
   on word timestamps and lines are balanced (no orphan words)
 - Output next to the source or into a custom folder, `video.en.srt` naming that media players auto-detect, suffix, overwrite guard
-- **Embed** the result as a soft subtitle track into an `.mkv` / `.mp4` copy (FFmpeg stream copy, no re-encode)
+- One **Deliver as** dropdown decides what comes out: subtitle files, a video with a soft subtitle track
+  (`.mkv` / `.mp4`, stream copy, no re-encode), or a video with the subtitles **hardcoded** into the picture
+- Subtitle formats: `srt` (default), `vtt`, `ass`, `sub` (MicroDVD), `txt`, `json`
 - Presets menu (Fast / Balanced / Accurate / Best), save / load / import / export your own, user defaults
 - Settings sanity check before starting (English-only model + foreign language, translate with `*.en`, missing binaries …)
 - Cross-platform: Windows, Linux, macOS
@@ -180,8 +183,24 @@ material and real containers, not how well Whisper transcribes any particular fi
 
 ## Output
 
-For `movie.mp4` with language English you get `movie.en.srt` (and any other selected formats). With *Embed into video*
-enabled an additional `movie.subbed.mkv` (or `.mp4`) is written containing the original streams plus the subtitle track.
+For `movie.mp4` with language English you get `movie.en.srt` (and any other format ticked on the Subtitles tab).
+
+**Deliver as** (Subtitles tab) decides whether a video is written as well:
+
+| Choice | What you get | Cost |
+|---|---|---|
+| **Subtitle file** (default) | the ticked formats only | none |
+| **Embed in the video** | `movie.subbed.mkv` / `.mp4` — the original streams plus a subtitle track the player can switch on and off | a stream copy: quick, no quality lost |
+| **Hardcode into the video** | `movie.hardsub.mkv` / `.mp4` — the subtitles drawn into the picture, impossible to turn off | a full re-encode (x264, quality selectable): roughly as long as the film, and some quality goes |
+
+Hardcode is for players and sites that show no subtitle tracks at all; anywhere else, embedding keeps the
+picture untouched and stays switchable. An audio file has no picture to burn into, so hardcoding skips it and
+says so — the subtitle files are still written.
+
+Formats: `srt` and `vtt` are the ones players expect, `ass` carries styling and line breaks explicitly, `sub`
+is MicroDVD for older players — it counts **frames**, so it is written at the source's frame rate (declared on
+its first line, 25 where none could be probed) and drifts if played at another rate. `txt` is the text alone,
+`json` keeps the segments, word timings and Whisper's own quality numbers.
 
 ## Windows says the app is not safe
 
@@ -207,6 +226,26 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.8.2
+
+- **One dropdown decides what comes out.** *Deliver as* on the Subtitles tab: a subtitle file, the subtitles
+  embedded in the video as a soft track, or hardcoded into the picture. It replaces the *Embed into video*
+  checkbox, and settings and presets that carry the old checkbox are read as *Embed*.
+- **Hardcoding.** The subtitles are drawn into the video with FFmpeg's `subtitles` filter and x264 (CRF 18 /
+  20 / 24, chosen in the box beside the dropdown), audio copied where the container allows it and re-encoded
+  where it does not. The progress bar follows the encode, Stop kills it within a second, and the output is
+  written under a temporary name so a stopped encode leaves no half-written film.
+- FFmpeg is run from a temporary folder holding the subtitles as `subs.srt`, because the filter argument is
+  parsed by FFmpeg rather than the shell: a real path's colons, backslashes, commas and brackets each break it
+  in their own way, and a plain name in the working directory has none of them. Every other path is made
+  absolute, or it would be resolved against that folder.
+- An audio file has no picture to burn into: the subtitles are written and the video step is skipped with a
+  message, rather than failing the file.
+- **Two more subtitle formats.** `ass` (Advanced SubStation Alpha, styled, with the line breaks placed
+  explicitly) and `sub` (MicroDVD, for older players). MicroDVD counts frames rather than seconds, so it is
+  written at the source's frame rate, taken from the file and declared on the first line — 25 when nothing
+  could be probed.
 
 ## Changes in 1.8.1
 

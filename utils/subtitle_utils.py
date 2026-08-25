@@ -975,6 +975,56 @@ def to_vtt(segments: List[Dict], max_line_chars: int, max_lines: int) -> str:
     return "\n".join(parts)
 
 
+def _ts_ass(t: float) -> str:
+    """ASS wants centiseconds and a single-digit hour"""
+    cs = int(round(max(0.0, t) * 100))
+    h, cs = divmod(cs, 360_000)
+    m, cs = divmod(cs, 6000)
+    sec, cs = divmod(cs, 100)
+    return f"{h:d}:{m:02d}:{sec:02d}.{cs:02d}"
+
+
+ASS_HEADER = """[Script Info]
+ScriptType: v4.00+
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+PlayResX: 384
+PlayResY: 288
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,16,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+
+
+def to_ass(segments: List[Dict], max_line_chars: int, max_lines: int) -> str:
+    r"""Advanced SubStation Alpha. The player does the styling, so the line breaks are ours to place:
+    a hard break in ASS is \N, and a comma inside the text is safe because Text is the last field on
+    the line and everything after the ninth comma belongs to it."""
+    parts = [ASS_HEADER]
+    for s in segments:
+        text = wrap_lines(s["text"], max_line_chars, max_lines).replace("\n", r"\N")
+        parts.append(f"Dialogue: 0,{_ts_ass(s['start'])},{_ts_ass(s['end'])},Default,,0,0,0,,{text}\n")
+    return "".join(parts)
+
+
+def to_sub(segments: List[Dict], max_line_chars: int, max_lines: int, fps: float = 25.0) -> str:
+    """MicroDVD (.sub): frame numbers, not times, so it is only right at the frame rate it was written
+    for. The first line declares that rate, which is what a player reads to convert back; where no rate
+    could be probed 25 is used, and a file played at another rate will drift by the ratio between them."""
+    fps = float(fps) if fps and fps > 0 else 25.0
+    lines = ["{1}{1}%.3f" % fps]
+    for s in segments:
+        start = max(0, int(round(s["start"] * fps)))
+        end = max(start + 1, int(round(s["end"] * fps)))
+        text = wrap_lines(s["text"], max_line_chars, max_lines).replace("|", "/").replace("\n", "|")
+        lines.append("{%d}{%d}%s" % (start, end, text))
+    return "\n".join(lines) + "\n"
+
+
 def to_txt(segments: List[Dict]) -> str:
     return "\n".join(s["text"] for s in segments) + "\n"
 
@@ -989,8 +1039,10 @@ def to_json(segments: List[Dict], meta: Dict) -> str:
 
 
 def write_subtitles(segments: List[Dict], base_path: str, formats: List[str],
-                    max_line_chars: int, max_lines: int, meta: Dict, overwrite: bool) -> List[str]:
-    """Write every requested format next to base_path (without extension). Returns written paths."""
+                    max_line_chars: int, max_lines: int, meta: Dict, overwrite: bool,
+                    fps: float = 25.0) -> List[str]:
+    """Write every requested format next to base_path (without extension). Returns written paths.
+    fps is only used by MicroDVD (.sub), which counts frames rather than seconds."""
     written = []
     for fmt in formats:
         path = f"{base_path}.{fmt}"
@@ -1000,6 +1052,10 @@ def write_subtitles(segments: List[Dict], base_path: str, formats: List[str],
             data = to_srt(segments, max_line_chars, max_lines)
         elif fmt == "vtt":
             data = to_vtt(segments, max_line_chars, max_lines)
+        elif fmt == "ass":
+            data = to_ass(segments, max_line_chars, max_lines)
+        elif fmt == "sub":
+            data = to_sub(segments, max_line_chars, max_lines, fps)
         elif fmt == "txt":
             data = to_txt(segments)
         elif fmt == "json":

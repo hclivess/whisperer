@@ -10,9 +10,10 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from config import MUX_CONTAINERS
+from config import HARDCODE_QUALITY, MUX_CONTAINERS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
-from utils.ffmpeg_utils import find_ffmpeg, probe_duration, extract_audio, mux_subtitles
+from utils.ffmpeg_utils import (find_ffmpeg, probe_duration, probe_fps, extract_audio, mux_subtitles,
+                               burn_subtitles, has_video)
 from utils.subtitle_utils import (capitalize_sentences, drop_looped_text, drop_repeated_text,
                                   enforce_min_duration,
                                   merge_short_cues, repair_sentence_breaks, repair_sentence_starts,
@@ -25,6 +26,14 @@ try:
     import psutil
 except Exception:  # psutil is optional (used to suspend whisper-cli on pause)
     psutil = None
+
+
+def delivery_mode(s: Dict) -> str:
+    """What to produce: file | embed | hardcode. Settings saved before 1.8.2 say mux_subtitles instead."""
+    mode = s.get("delivery")
+    if mode in ("file", "embed", "hardcode"):
+        return mode
+    return "embed" if s.get("mux_subtitles") else "file"
 
 
 class _Worker(QThread):
@@ -389,31 +398,57 @@ class _Worker(QThread):
                 segments = shift_cues(segments, int(s["global_offset_ms"]) / 1000.0)
             meta["source"] = os.path.basename(src)
             self.status.emit(f"Writing subtitles: {qf.name}")
+            # MicroDVD counts frames, so it needs the source's rate; nothing else asks ffprobe for it
+            fps = (probe_fps(src) or 25.0) if "sub" in s["formats"] else 25.0
             outputs = write_subtitles(segments, base_path, list(s["formats"]), int(s["max_line_chars"]),
-                                      int(s["max_lines"]), meta, bool(s["overwrite"]))
+                                      int(s["max_lines"]), meta, bool(s["overwrite"]), fps)
             # the live pane has been showing the first decode all this time; hand it what was written
             self.transcript.emit(index, [{"start": float(c["start"]), "end": float(c["end"]),
                                           "text": c.get("text", "")} for c in segments])
 
-            if s.get("mux_subtitles"):
+            delivery = delivery_mode(s)
+            if delivery in ("embed", "hardcode"):
                 srt = f"{base_path}.srt"
                 if "srt" not in s["formats"]:
-                    # need an srt for muxing; write a temporary one
+                    # the video carries an SRT either way; write a temporary one when none was asked for
                     srt = os.path.join(tmpdir, "subs.srt")
                     write_subtitles(segments, os.path.splitext(srt)[0], ["srt"], int(s["max_line_chars"]),
                                     int(s["max_lines"]), meta, True)
                 container = s.get("mux_container", "mkv")
                 if container not in MUX_CONTAINERS:
                     container = "mkv"
-                muxed = os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + f".subbed.{container}")
-                if os.path.exists(muxed) and not s["overwrite"]:
-                    raise FileExistsError(f"Output exists (enable Overwrite): {muxed}")
-                self.status.emit(f"Muxing subtitles into {os.path.basename(muxed)}")
-                lang = meta.get("language") or s["language"]
-                if s["task"] == "translate":
-                    lang = "en"
-                mux_subtitles(src, srt, muxed, container, lang, stop_check=self._stop.is_set)
-                outputs.append(muxed)
+                tag = "subbed" if delivery == "embed" else "hardsub"
+                video_out = os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + f".{tag}.{container}")
+                if os.path.exists(video_out) and not s["overwrite"]:
+                    raise FileExistsError(f"Output exists (enable Overwrite): {video_out}")
+                if delivery == "embed":
+                    self.status.emit(f"Muxing subtitles into {os.path.basename(video_out)}")
+                    lang = meta.get("language") or s["language"]
+                    if s["task"] == "translate":
+                        lang = "en"
+                    mux_subtitles(src, srt, video_out, container, lang, stop_check=self._stop.is_set)
+                elif not has_video(src):
+                    # an audio file has no picture to burn into; the subtitles were written all the same
+                    self.status.emit(f"{os.path.basename(src)} has no video stream — subtitles written, "
+                                     "nothing to hardcode into")
+                    video_out = ""
+                else:
+                    _, crf, preset = HARDCODE_QUALITY.get(s.get("hardcode_quality", "balanced"),
+                                                          HARDCODE_QUALITY["balanced"])
+                    total = float(qf.duration or 0)
+                    self.status.emit(f"Hardcoding subtitles into {os.path.basename(video_out)} — "
+                                     "the video is re-encoded, this takes a while")
+                    self.file_progress.emit(0)
+
+                    def report(done: float, total=total, name=os.path.basename(video_out)):
+                        if total > 0:
+                            self.file_progress.emit(max(0, min(1000, int(done / total * 1000))))
+                            self.status.emit(f"Hardcoding {name} — {done / total * 100:.0f}%")
+
+                    burn_subtitles(src, srt, video_out, container, crf, preset,
+                                   stop_check=self._stop.is_set, progress=report)
+                if video_out:
+                    outputs.append(video_out)
 
             self.file_progress.emit(1000)
             self._emit_overall(index, qf.duration or 0, qf.duration or 0)
@@ -489,7 +524,8 @@ class ProcessManager(QObject):
 
     def validate_settings(self, s: Dict) -> List[str]:
         issues = []
-        if not s["formats"] and not s.get("mux_subtitles"):
+        delivery = delivery_mode(s)
+        if not s["formats"] and delivery == "file":
             issues.append("No output format selected (Subtitles tab).")
         if s["engine"] == "faster_whisper" and not faster_whisper_available():
             issues.append("faster-whisper is not installed: pip install faster-whisper")
@@ -504,8 +540,8 @@ class ProcessManager(QObject):
                 issues.append("Device is set to CUDA but the GPU is not usable: " + str(st["text"]).split("\n")[0])
         if s["engine"] == "faster_whisper" and s.get("extra_args"):
             issues.append("Extra whisper-cli arguments are ignored by the faster-whisper engine.")
-        if s.get("mux_subtitles") and not find_ffmpeg():
-            issues.append("FFmpeg is required to mux subtitles into the video.")
+        if delivery in ("embed", "hardcode") and not find_ffmpeg():
+            issues.append("FFmpeg is required to put the subtitles into the video.")
         if s["task"] == "translate" and s["model"].endswith(".en"):
             issues.append("English-only models (*.en) cannot translate; pick a multilingual model.")
         if s["language"] not in ("en", "auto") and s["model"].endswith(".en"):
