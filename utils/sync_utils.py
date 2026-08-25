@@ -162,14 +162,12 @@ def _ass_text(raw: str) -> str:
     return "\n".join(line.strip() for line in body.split("\n")).strip()
 
 
-def parse_ass(text: str) -> List[Dict]:
-    """ASS / SSA. The Format line names the fields and their order, which is not fixed between files,
-    so it is read rather than assumed; Text is last by definition, and keeps every comma in it.
-    Comment lines are not subtitles and styling is dropped — resync rewrites timing, not appearance."""
-    cues: List[Dict] = []
+def _ass_events(text: str):
+    """Walk the [Events] section once: yields (line number, fields dict, field order) for Dialogue lines.
+    The parser and the retimer both use this, so they cannot disagree about which line is which cue."""
     fields: List[str] = []
     in_events = False
-    for raw in text.splitlines():
+    for number, raw in enumerate(text.splitlines()):
         line = raw.strip()
         if line.startswith("["):
             in_events = line.lower().startswith("[events")
@@ -182,15 +180,95 @@ def parse_ass(text: str) -> List[Dict]:
             fields = [f.strip().lower() for f in rest.split(",")]
         elif key == "dialogue" and fields:
             parts = rest.split(",", len(fields) - 1)
-            if len(parts) < len(fields):
-                continue                    # a truncated line: skip this cue, not the file
-            row = dict(zip(fields, parts))
-            start, end = _TS.search(row.get("start", "")), _TS.search(row.get("end", ""))
-            body = _ass_text(row.get("text", ""))
-            if start and end and body:
-                cues.append({"start": _ts(start), "end": _ts(end), "text": body})
+            if len(parts) == len(fields):
+                yield number, dict(zip(fields, parts)), fields
+
+
+def parse_ass(text: str) -> List[Dict]:
+    """ASS / SSA. The Format line names the fields and their order, which is not fixed between files,
+    so it is read rather than assumed; Text is last by definition, and keeps every comma in it.
+    Comment lines are not subtitles and styling is dropped — resync rewrites timing, not appearance."""
+    cues: List[Dict] = []
+    for _number, row, _fields in _ass_events(text):
+        start, end = _TS.search(row.get("start", "")), _TS.search(row.get("end", ""))
+        body = _ass_text(row.get("text", ""))
+        if start and end and body:
+            cues.append({"start": _ts(start), "end": _ts(end), "text": body})
     cues.sort(key=lambda c: c["start"])
     return cues
+
+
+def _ts_ass_out(t: float) -> str:
+    """ASS writes H:MM:SS.cc"""
+    cs = int(round(max(0.0, t) * 100))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    sec, cs = divmod(cs, 100)
+    return f"{h:d}:{m:02d}:{sec:02d}.{cs:02d}"
+
+
+def retime_ass(text: str, cues: List[Dict]) -> Optional[str]:
+    """
+    Rewrite an ASS file's timings and nothing else.
+
+    Resync moves cues in time; the styling, positioning, karaoke and comments in the file it was given have
+    nothing to do with time and are none of its business. So the original text is returned with only the
+    Start and End fields of each Dialogue line replaced — byte for byte identical everywhere else.
+
+    The i-th cue belongs to the i-th event *in the order the parser produced them*, which is by start time,
+    so the same sort is applied here to the line numbers. Returns None when the cue count no longer matches
+    the file, which means something upstream merged or split cues and there is no honest mapping left.
+    """
+    events = [(number, row, fields) for number, row, fields in _ass_events(text)
+              if _TS.search(row.get("start", "")) and _TS.search(row.get("end", "")) and _ass_text(row.get("text", ""))]
+    if len(events) != len(cues):
+        return None
+    order = sorted(range(len(events)), key=lambda i: _ts(_TS.search(events[i][1]["start"])))
+    lines = text.splitlines(keepends=True)
+    for rank, index in enumerate(order):
+        number, row, fields = events[index]
+        row = dict(row)
+        row["start"], row["end"] = _ts_ass_out(cues[rank]["start"]), _ts_ass_out(cues[rank]["end"])
+        ending = lines[number][len(lines[number].rstrip("\r\n")):]
+        # the fields keep the spacing they had, so "Dialogue: 0,..." comes back exactly as it went in
+        lines[number] = "Dialogue:" + ",".join(row[f] for f in fields) + ending
+    return "".join(lines)
+
+
+def retime_microdvd(text: str, cues: List[Dict], fps: Optional[float] = None) -> Optional[str]:
+    """The same for MicroDVD: only the two frame numbers on each line change, and at the rate the file
+    declares — writing new frames at a different rate than the file was read with would move every cue."""
+    lines = text.splitlines(keepends=True)
+    declared = None
+    for raw in lines[:3]:
+        m = _MICRODVD.match(raw)
+        if m and m.group(1) == m.group(2):
+            try:
+                candidate = float(m.group(3).strip())
+            except ValueError:
+                continue
+            if 1.0 <= candidate <= 1000.0:
+                declared = candidate
+                break
+    rate = declared or (fps if fps and fps > 0 else None) or DEFAULT_FPS
+    entries = []
+    for number, raw in enumerate(lines):
+        m = _MICRODVD.match(raw)
+        if not m or m.group(1) == m.group(2):
+            continue
+        body = "\n".join(part.strip().lstrip("/") for part in m.group(3).split("|")).strip()
+        if re.sub(r"^\{[^}]*\}", "", body).strip():
+            entries.append((number, int(m.group(1)), m.group(3)))
+    if len(entries) != len(cues):
+        return None
+    order = sorted(range(len(entries)), key=lambda i: entries[i][1])
+    for rank, index in enumerate(order):
+        number, _first, body = entries[index]
+        start = max(0, int(round(cues[rank]["start"] * rate)))
+        end = max(start + 1, int(round(cues[rank]["end"] * rate)))
+        ending = lines[number][len(lines[number].rstrip("\r\n")):]
+        lines[number] = "{%d}{%d}%s%s" % (start, end, body, ending)
+    return "".join(lines)
 
 
 def parse_microdvd(text: str, fps: Optional[float] = None) -> List[Dict]:

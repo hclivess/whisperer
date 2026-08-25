@@ -19,7 +19,8 @@ from utils.subtitle_utils import (capitalize_sentences, drop_looped_text, drop_r
                                   merge_short_cues, repair_sentence_breaks, repair_sentence_starts,
                                   split_segments, strip_foreign_script, unify_word_case, write_subtitles)
 from utils import childproc
-from utils.sync_utils import parse_subtitles, resync_cues, shift_cues, snap_to_speech, speech_regions
+from utils.sync_utils import (parse_subtitles, resync_cues, retime_ass, retime_microdvd, shift_cues,
+                              snap_to_speech, speech_regions)
 from utils.verify_utils import merge_windows, resolve_passes, review_lines, vocabulary_prompt
 
 try:
@@ -164,6 +165,7 @@ class _Worker(QThread):
             lang = s["language"]
             if lang != "auto":
                 stem += f".{lang}" if s["task"] == "transcribe" else ".en"
+        retime = False              # set in the resync branch below, when the input is a styled file
         base_path = os.path.join(out_dir, stem)
         for fmt in s["formats"]:
             p = f"{base_path}.{fmt}"
@@ -306,9 +308,17 @@ class _Worker(QThread):
                 # the one it was written against
                 sub_fps = probe_fps(src) if sub_path.lower().endswith(".sub") else None
                 with open(sub_path, encoding="utf-8", errors="replace") as fh:
-                    cues = parse_subtitles(fh.read(), sub_fps)
+                    sub_text = fh.read()
+                cues = parse_subtitles(sub_text, sub_fps)
                 if not cues:
                     raise RuntimeError(f"No cues found in {sub_path}")
+                # a styled file can keep its styling: its own timings are rewritten rather than the file
+                # regenerated, which means the cue count has to survive the pipeline untouched
+                retime = (os.path.splitext(sub_path)[1].lower() in (".ass", ".ssa", ".sub")
+                          and bool(s.get("retime_in_place", True)))
+                if retime:
+                    self.status.emit(f"Keeping {os.path.basename(sub_path)}'s own layout: its timings are "
+                                     "rewritten in place, and the pass that joins short cues is not run on it")
                 segments, report = resync_cues(cues, segments, bool(s.get("resync_fit_speed", True)))
                 meta["resync"] = {"source": os.path.basename(sub_path), **report}
                 self.status.emit(f"Resync: offset {report['offset']:+.3f} s, speed {report['speed']:.5f} "
@@ -364,7 +374,7 @@ class _Worker(QThread):
                     min_duration=int(s.get("min_cue_ms", 800)) / 1000.0, min_gap=int(s.get("min_gap_ms", 80)) / 1000.0,
                     max_duration=float(s["max_segment_seconds"]) if s.get("sync_mode") != "resync" else 0.0)
                 meta["speech_regions"] = len(regions)
-            if s.get("merge_short_cues", True):
+            if s.get("merge_short_cues", True) and not retime:
                 # resync included: the merged cue spans exactly the two it replaces, so no boundary moves
                 # and no text is lost - it is the only way to fix a flash in a subtitle we did not write
                 resync = s.get("sync_mode") == "resync"
@@ -405,6 +415,25 @@ class _Worker(QThread):
             fps = (probe_fps(src) or 25.0) if "sub" in s["formats"] else 25.0
             outputs = write_subtitles(segments, base_path, list(s["formats"]), int(s["max_line_chars"]),
                                       int(s["max_lines"]), meta, bool(s["overwrite"]), fps)
+            if retime:
+                extension = os.path.splitext(sub_path)[1].lower()
+                rewritten = (retime_microdvd(sub_text, segments, sub_fps) if extension == ".sub"
+                             else retime_ass(sub_text, segments))
+                target = f"{base_path}{extension}"
+                if rewritten is None:
+                    self.status.emit(f"{os.path.basename(sub_path)}: the cue count changed on the way through, "
+                                     "so the styling could not be carried over — the ticked formats hold the "
+                                     "new timings")
+                elif os.path.exists(target) and not s["overwrite"]:
+                    raise FileExistsError(f"Output exists (enable Overwrite): {target}")
+                else:
+                    tmp = target + ".part"
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        fh.write(rewritten)
+                    os.replace(tmp, target)          # never a half-written file under the real name
+                    outputs.append(target)
+                    self.status.emit(f"Wrote {os.path.basename(target)} with the original's styling intact")
+
             # the live pane has been showing the first decode all this time; hand it what was written
             self.transcript.emit(index, [{"start": float(c["start"]), "end": float(c["end"]),
                                           "text": c.get("text", "")} for c in segments])

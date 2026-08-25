@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.sync_utils import (apply_linear, fit_linear, match_points, parse_subtitles, reference_words,  # noqa: E402
+                              retime_ass, retime_microdvd,
                               resync_cues, shift_cues, snap_to_speech, subtitle_words)
 
 
@@ -628,3 +629,62 @@ def test_a_truncated_ass_line_costs_one_cue_not_the_file():
     broken = ASS_FILE.replace("Dialogue: 0,0:00:06.25,0:00:08.00,Default,,0,0,0,,{\\i1}Third{\\i0}",
                               "Dialogue: 0,0:00:06.25,0:00:08.00")
     assert len(parse_subtitles(broken)) == 1
+
+
+# ---------------------------------------------------------------- retiming a styled file in place
+
+STYLED = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour
+Style: Karaoke,Impact,72,&H00FF00FF
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Comment: 0,0:00:00.00,0:00:01.00,Karaoke,,0,0,0,,a note to the editor, kept
+Dialogue: 0,0:00:03.00,0:00:05.50,Karaoke,,0,0,0,,{\\pos(960,1000)\\k25}Styled line, with a comma
+Dialogue: 0,0:00:05.60,0:00:07.00,Karaoke,,0,0,0,,Second line
+"""
+
+
+def test_retiming_changes_the_timings_and_nothing_else():
+    cues = parse_subtitles(STYLED)
+    moved = [{**c, "start": c["start"] - 2.79, "end": c["end"] - 2.79} for c in cues]
+    out = retime_ass(STYLED, moved)
+    assert "0:00:00.21,0:00:02.71" in out and "0:00:02.81,0:00:04.21" in out
+    for kept in ("Style: Karaoke,Impact,72,&H00FF00FF", "{\\pos(960,1000)\\k25}", "PlayResX: 1920",
+                 "a note to the editor, kept", "Styled line, with a comma"):
+        assert kept in out, kept
+    # the comment line is not a subtitle and keeps its own timing
+    assert "Comment: 0,0:00:00.00,0:00:01.00" in out
+    # and the file is the same size in lines: nothing added, nothing dropped
+    assert len(out.splitlines()) == len(STYLED.splitlines())
+
+
+def test_retiming_refuses_when_the_cue_count_no_longer_matches():
+    cues = parse_subtitles(STYLED)
+    assert retime_ass(STYLED, cues[:1]) is None          # a merge upstream: no honest mapping left
+    assert retime_ass(STYLED, cues + cues) is None
+
+
+def test_retiming_follows_the_parser_when_the_file_is_out_of_order():
+    shuffled = STYLED.replace(
+        "Dialogue: 0,0:00:03.00,0:00:05.50,Karaoke,,0,0,0,,{\\pos(960,1000)\\k25}Styled line, with a comma\n"
+        "Dialogue: 0,0:00:05.60,0:00:07.00,Karaoke,,0,0,0,,Second line\n",
+        "Dialogue: 0,0:00:05.60,0:00:07.00,Karaoke,,0,0,0,,Second line\n"
+        "Dialogue: 0,0:00:03.00,0:00:05.50,Karaoke,,0,0,0,,{\\pos(960,1000)\\k25}Styled line, with a comma\n")
+    cues = parse_subtitles(shuffled)                     # the parser sorts by start, the file does not
+    out = retime_ass(shuffled, [{"start": 10.0, "end": 11.0}, {"start": 20.0, "end": 21.0}])
+    line_second = [l for l in out.splitlines() if l.endswith("Second line")][0]
+    line_styled = [l for l in out.splitlines() if l.endswith("with a comma")][0]
+    assert "0:00:20.00,0:00:21.00" in line_second        # the later cue keeps the later time
+    assert "0:00:10.00,0:00:11.00" in line_styled
+
+
+def test_microdvd_is_retimed_at_the_rate_the_file_declares():
+    original = "{1}{1}25.000\n{75}{137}First line|second\n{140}{175}/italic\n"
+    out = retime_microdvd(original, [{"start": 0.2, "end": 2.5}, {"start": 2.8, "end": 4.0}])
+    assert out.splitlines() == ["{1}{1}25.000", "{5}{62}First line|second", "{70}{100}/italic"]
+    assert retime_microdvd(original, [{"start": 0.0, "end": 1.0}]) is None

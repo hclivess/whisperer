@@ -130,6 +130,7 @@ DEFAULT_SETTINGS = {
     "global_offset_ms": 0,
     "resync_file": "",              # empty = <video>.srt / .vtt next to the source
     "resync_fit_speed": True,
+    "retime_in_place": True,        # an ASS or MicroDVD input keeps its styling: only its timings change
     # Subtitles
     "formats": ["srt"],
     "max_line_chars": 42,

@@ -583,6 +583,14 @@ class UIManager(QWidget):
                                     lambda: self._browse_file(self.controls["resync_file"], "Subtitle file to resync",
                                                               "Subtitles (*.srt *.vtt *.ass *.ssa *.sub);;"
                                                               "All files (*)")), 0, 1)
+        self.controls["retime_in_place"] = QCheckBox("Keep an ASS/MicroDVD file's own styling and layout")
+        self.controls["retime_in_place"].setChecked(True)
+        self.controls["retime_in_place"].setToolTip(
+            "A styled subtitle file is rewritten in place — only its timings change, so positioning, fonts, "
+            "karaoke and comments survive. Its cue layout is kept as it is, which means the pass that joins "
+            "cues too short to read is not run on it. Turn this off to regenerate the file in the formats "
+            "ticked on the Subtitles tab instead.")
+        rg.addWidget(self.controls["retime_in_place"], 2, 0, 1, 2)
         self.controls["resync_fit_speed"] = QCheckBox("Also fit speed (frame-rate drift, 23.976 ↔ 25 fps)")
         self.controls["resync_fit_speed"].setChecked(True)
         self.controls["resync_fit_speed"].setToolTip("Off: a single constant offset is fitted. On: offset and a speed "
@@ -1341,6 +1349,7 @@ class UIManager(QWidget):
             "global_offset_ms": c["global_offset_ms"].value(),
             "resync_file": c["resync_file"].text().strip(),
             "resync_fit_speed": c["resync_fit_speed"].isChecked(),
+            "retime_in_place": c["retime_in_place"].isChecked(),
             "formats": [f for f, cb in self.format_checks.items() if cb.isChecked()],
             "max_line_chars": c["max_line_chars"].value(),
             "max_lines": c["max_lines"].value(),
