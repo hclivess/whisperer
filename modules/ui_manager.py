@@ -573,13 +573,16 @@ class UIManager(QWidget):
         rg = QGridLayout(self.resync_widget)
         rg.setContentsMargins(0, 0, 0, 0)
         self.controls["resync_file"] = QLineEdit()
-        self.controls["resync_file"].setPlaceholderText("auto: <video>.srt / .vtt next to the file")
-        self.controls["resync_file"].setToolTip("Subtitle file to align. Leave empty to pick the .srt/.vtt with the "
+        self.controls["resync_file"].setPlaceholderText("auto: <video>.srt / .vtt / .ass / .sub next to the file")
+        self.controls["resync_file"].setToolTip("Subtitle file to align: SRT, WebVTT, ASS/SSA or MicroDVD. Styling "
+                                                "is not carried over — the words and the new timing are. Leave empty "
+                                                "to pick the subtitle file with the "
                                                 "video's name. The result is written as <video>.synced.srt.")
         rg.addWidget(QLabel("Subtitle file:"), 0, 0)
         rg.addLayout(self._path_row(self.controls["resync_file"],
                                     lambda: self._browse_file(self.controls["resync_file"], "Subtitle file to resync",
-                                                              "Subtitles (*.srt *.vtt);;All files (*)")), 0, 1)
+                                                              "Subtitles (*.srt *.vtt *.ass *.ssa *.sub);;"
+                                                              "All files (*)")), 0, 1)
         self.controls["resync_fit_speed"] = QCheckBox("Also fit speed (frame-rate drift, 23.976 ↔ 25 fps)")
         self.controls["resync_fit_speed"].setChecked(True)
         self.controls["resync_fit_speed"].setToolTip("Off: a single constant offset is fitted. On: offset and a speed "

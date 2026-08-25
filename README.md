@@ -27,8 +27,8 @@ A sibling of [videer](https://github.com/hclivess/videer) (same queue / progress
   skipped is recovered. Passes 3+ only re-decode the spans nothing agreed on
 - **Timing that follows the audio** — cues are snapped to speech on/offsets found by a voice-activity detector
   (Silero VAD), held a moment after speech, never overlapping; word-level alignment is used to build the cues
-- **Resync existing subtitles** (the SubSync idea, built in): match an `.srt` / `.vtt` against a transcript of the
-  audio, fit offset + speed robustly, rewrite the timing — the text stays untouched
+- **Resync existing subtitles** (the SubSync idea, built in): match an `.srt` / `.vtt` / `.ass` / `.sub` against a
+  transcript of the audio, fit offset + speed robustly, rewrite the timing — the text stays untouched
 - Subtitle layout control: max characters per line, max lines per cue, max cue duration — long segments are re-split
   on word timestamps and lines are balanced (no orphan words)
 - Output next to the source or into a custom folder, `video.en.srt` naming that media players auto-detect, suffix, overwrite guard
@@ -149,7 +149,14 @@ video. whisperer 1.3 fixes the timing from the audio itself:
 | Everything early by a constant amount | Audio streams with a non-zero start time are now extracted in place (`aresample=first_pts=0`), and timestamp gaps are filled with silence so nothing drifts over dropped packets. If you still want a nudge: **Global offset**. |
 | Subtitles from somewhere else are off or drift over the film | **Resync an existing subtitle file**: whisperer transcribes the audio, matches the words of your `.srt`/`.vtt` against it, fits `audio_time = speed × sub_time + offset` with a robust (median-slope + inlier least-squares) fit, applies it to every cue and VAD-snaps the result. Speed is only fitted on clips longer than two minutes and only in the 0.9–1.1 range (23.976 ↔ 25 fps conversions). Output: `movie.synced.srt`; the log shows offset, speed, drift per hour and how many words agreed. |
 
-Resync picks `movie.srt` / `movie.vtt` next to the video unless you choose a file. A file that does not match the
+Resync reads **SRT, WebVTT, ASS/SSA and MicroDVD**, recognised by content rather than by extension, so a
+mislabelled file still opens. MicroDVD counts frames: the rate it declares on its first line wins, the video's
+own rate is used when it declares none, and 25 stands in when neither is available — a wrong rate is a constant
+ratio error, which is exactly what the speed fit corrects. **Styling is not carried over**: resync rewrites the
+words' timing, and the output is written in the formats ticked on the Subtitles tab, so an ASS in means a plain
+ASS (or SRT) out, without the original's positioning, fonts or karaoke.
+
+Resync picks `movie.srt` / `movie.vtt` / `movie.ass` / `movie.sub` next to the video unless you choose a file. A file that does not match the
 audio (wrong language, different cut) is rejected with an explanation rather than guessed at.
 
 ## Measured on real film
@@ -226,6 +233,25 @@ workflow and switches on as soon as the `SIGNPATH_API_TOKEN` secret exists.
 `WHISPERER_SELFTEST=<media file>` makes the app transcribe that file headlessly with `tiny.en` and exit — the CI uses it to
 verify the frozen build. Tagged pushes build Windows / Linux / macOS packages on
 GitHub Actions and attach them to the release.
+
+## Changes in 1.8.3
+
+- **Resync reads ASS/SSA and MicroDVD too.** 1.8.2 started writing both and could not read either back, which
+  left anyone who chose those formats unable to resync their own output. The format is recognised from the
+  content, not the file name.
+- ASS is read through its own `Format:` line rather than the usual field order, because that order is not fixed
+  between files and a file that moves `Start` and `End` would otherwise be read backwards. `Comment:` lines are
+  not subtitles, override blocks are styling, and `\N` / `\n` / `\h` become real breaks and spaces. A truncated
+  line costs that one cue, not the file.
+- MicroDVD needs a frame rate to mean anything: the file's own declaration wins, the video's probed rate stands
+  in, and 25 is the last resort. Since a wrong rate is a constant ratio over the whole file, the speed fit is
+  what corrects it — that is the 23.976 ↔ 25 case resync already existed for.
+- **Styling is not carried over.** Resync rewrites timing and writes the formats ticked on the Subtitles tab, so
+  an ASS keeps its words and loses its positioning and fonts. Retiming a file in place, keeping everything else
+  byte for byte, is a separate job — the merge and minimum-duration passes change the cue count, and that has to
+  be handled deliberately rather than as a side effect.
+- Auto-discovery next to the video and the file dialog cover all four formats; a `.synced.` file from an earlier
+  run is never picked up, whatever its extension.
 
 ## Changes in 1.8.2
 

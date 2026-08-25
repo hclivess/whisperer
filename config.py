@@ -3,7 +3,7 @@ whisperer - configuration and constants
 """
 
 APP_NAME = "whisperer"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 WINDOW_MIN_WIDTH = 820
 WINDOW_MIN_HEIGHT = 560
 
@@ -75,6 +75,9 @@ TASKS = {"transcribe": "Transcribe (same language)", "translate": "Translate to 
 
 # srt is the default; ass carries styling, sub (MicroDVD) counts frames rather than seconds
 SUBTITLE_FORMATS = ["srt", "vtt", "ass", "sub", "txt", "json"]
+
+# Subtitle files resync can read. The writers cover more, but reading is what resync needs.
+SUBTITLE_INPUTS = (".srt", ".vtt", ".ass", ".ssa", ".sub")
 
 # Containers that can carry a soft subtitle track, with the codec to use
 MUX_CONTAINERS = {"mkv": "srt", "mp4": "mov_text"}

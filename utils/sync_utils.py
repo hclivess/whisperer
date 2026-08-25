@@ -140,9 +140,13 @@ def shift_cues(cues: List[Dict], offset: float) -> List[Dict]:
     return out
 
 
-# ---------------------------------------------------------------- SRT / VTT reading
+# ---------------------------------------------------------------- subtitle reading
 _TS = re.compile(r"(\d+):(\d{1,2}):(\d{1,2})[.,](\d{1,3})")
 _TAG = re.compile(r"<[^>]+>|\{\\[^}]*\}")
+_ASS_TAG = re.compile(r"\{[^}]*\}")             # in an ASS line every brace block is styling
+_DIALOGUE = re.compile(r"^\s*(Dialogue|Comment)\s*:", re.MULTILINE)
+_MICRODVD = re.compile(r"^\s*\{(-?\d+)\}\{(-?\d+)\}(.*)$")
+DEFAULT_FPS = 25.0
 
 
 def _ts(m) -> float:
@@ -150,9 +154,87 @@ def _ts(m) -> float:
     return int(h) * 3600 + int(mi) * 60 + int(s) + int(frac.ljust(3, "0")) / 1000.0
 
 
-def parse_subtitles(text: str) -> List[Dict]:
-    """Parse SRT or WebVTT text into cues. Tags are stripped; cue settings after the timing are ignored."""
+def _ass_text(raw: str) -> str:
+    r"""Strip the override blocks and turn ASS's own line breaks into real ones: \N is a hard break,
+    \n a soft one, \h a non-breaking space. Anything left in braces is styling, not words."""
+    body = _ASS_TAG.sub("", raw)
+    body = body.replace(r"\N", "\n").replace(r"\n", "\n").replace(r"\h", " ")
+    return "\n".join(line.strip() for line in body.split("\n")).strip()
+
+
+def parse_ass(text: str) -> List[Dict]:
+    """ASS / SSA. The Format line names the fields and their order, which is not fixed between files,
+    so it is read rather than assumed; Text is last by definition, and keeps every comma in it.
+    Comment lines are not subtitles and styling is dropped — resync rewrites timing, not appearance."""
+    cues: List[Dict] = []
+    fields: List[str] = []
+    in_events = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_events = line.lower().startswith("[events")
+            continue
+        if not in_events:
+            continue
+        key, _, rest = line.partition(":")
+        key = key.strip().lower()
+        if key == "format":
+            fields = [f.strip().lower() for f in rest.split(",")]
+        elif key == "dialogue" and fields:
+            parts = rest.split(",", len(fields) - 1)
+            if len(parts) < len(fields):
+                continue                    # a truncated line: skip this cue, not the file
+            row = dict(zip(fields, parts))
+            start, end = _TS.search(row.get("start", "")), _TS.search(row.get("end", ""))
+            body = _ass_text(row.get("text", ""))
+            if start and end and body:
+                cues.append({"start": _ts(start), "end": _ts(end), "text": body})
+    cues.sort(key=lambda c: c["start"])
+    return cues
+
+
+def parse_microdvd(text: str, fps: Optional[float] = None) -> List[Dict]:
+    """MicroDVD (.sub): frame numbers, so nothing here means anything without a frame rate. The file may
+    declare one in place of the first cue's text ({1}{1}23.976), which wins because it is what the file
+    was written for; failing that the caller's rate (probed from the video) is used, and failing that 25.
+    A wrong rate is a constant ratio error over the whole file — the speed fit is what corrects it."""
+    lines = text.splitlines()
+    declared = None
+    for raw in lines[:3]:
+        m = _MICRODVD.match(raw)
+        if m and m.group(1) == m.group(2):
+            try:
+                candidate = float(m.group(3).strip())
+            except ValueError:
+                continue
+            if 1.0 <= candidate <= 1000.0:
+                declared = candidate
+                break
+    rate = declared or (fps if fps and fps > 0 else None) or DEFAULT_FPS
+    cues: List[Dict] = []
+    for raw in lines:
+        m = _MICRODVD.match(raw)
+        if not m:
+            continue
+        first, last, body = int(m.group(1)), int(m.group(2)), m.group(3)
+        if first == last:
+            continue                        # the frame-rate line, or a cue with no duration to speak of
+        body = "\n".join(part.strip().lstrip("/") for part in body.split("|")).strip()
+        body = re.sub(r"^\{[^}]*\}", "", body).strip()      # {y:i} and friends style the line, not the words
+        if body:
+            cues.append({"start": max(0, first) / rate, "end": max(0, last) / rate, "text": body})
+    cues.sort(key=lambda c: c["start"])
+    return cues
+
+
+def parse_subtitles(text: str, fps: Optional[float] = None) -> List[Dict]:
+    """Parse SRT, WebVTT, ASS/SSA or MicroDVD text into cues. The format is recognised from the content
+    rather than the file name, so a mislabelled file still reads. fps is only consulted by MicroDVD."""
     text = text.lstrip("﻿")
+    if _DIALOGUE.search(text):
+        return parse_ass(text)
+    if any(_MICRODVD.match(line) for line in text.splitlines()[:20]):
+        return parse_microdvd(text, fps)
     cues: List[Dict] = []
     block: List[str] = []
 

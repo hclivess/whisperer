@@ -568,3 +568,63 @@ def test_drop_looped_text_needs_words_that_spell_the_text():
     from utils.subtitle_utils import drop_looped_text
     plain = [{"start": 0.0, "end": 1.5, "text": " ".join("a loop of words".split() * 4)}]
     assert drop_looped_text(plain) == plain
+
+
+# ---------------------------------------------------------------- ASS / MicroDVD reading
+
+ASS_FILE = """[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize
+Style: Default,Arial,16
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,{\\pos(10,10)}A line, with a comma\\NAnd its second half
+Comment: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,a note to the editor
+Dialogue: 0,0:00:06.25,0:00:08.00,Default,,0,0,0,,{\\i1}Third{\\i0}
+"""
+
+
+def test_ass_is_read_with_its_own_field_order():
+    cues = parse_subtitles(ASS_FILE)
+    assert [round(c["start"], 2) for c in cues] == [1.0, 6.25]      # the Comment line is not a subtitle
+    assert cues[0]["text"] == "A line, with a comma\nAnd its second half"
+    assert cues[1]["text"] == "Third"                              # styling overrides are dropped
+
+
+def test_ass_reads_a_reordered_format_line():
+    moved = ASS_FILE.replace("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+                             "Format: Layer, End, Start, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
+    # the same rows now mean end,start — a parser assuming the usual order would read them backwards
+    cues = parse_subtitles(moved)
+    assert [round(c["start"], 2) for c in cues] == [3.5, 8.0]
+
+
+def test_microdvd_uses_the_rate_the_file_declares():
+    cues = parse_subtitles("{1}{1}23.976\n{24}{84}Hello there|second line\n{100}{131}/italic")
+    assert round(cues[0]["start"], 3) == 1.001 and round(cues[0]["end"], 3) == 3.504
+    assert cues[0]["text"] == "Hello there\nsecond line"
+    assert cues[1]["text"] == "italic"                             # the italic marker is not a word
+
+
+def test_microdvd_falls_back_to_the_video_rate_then_to_25():
+    assert parse_subtitles("{30}{60}One", 30.0)[0]["end"] == 2.0
+    assert parse_subtitles("{25}{50}One")[0]["end"] == 2.0
+
+
+def test_a_declared_rate_beats_the_one_we_probed():
+    cues = parse_subtitles("{1}{1}25.000\n{25}{50}One", 30.0)
+    assert cues[0]["start"] == 1.0                                 # 25 fps as written, not 30 as probed
+
+
+def test_srt_braces_are_still_text():
+    cues = parse_subtitles("1\n00:00:01,000 --> 00:00:02,000\nplain {not a tag} text\n")
+    assert cues[0]["text"] == "plain {not a tag} text"
+
+
+def test_a_truncated_ass_line_costs_one_cue_not_the_file():
+    broken = ASS_FILE.replace("Dialogue: 0,0:00:06.25,0:00:08.00,Default,,0,0,0,,{\\i1}Third{\\i0}",
+                              "Dialogue: 0,0:00:06.25,0:00:08.00")
+    assert len(parse_subtitles(broken)) == 1

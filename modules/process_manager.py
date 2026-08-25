@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from config import HARDCODE_QUALITY, MUX_CONTAINERS
+from config import HARDCODE_QUALITY, MUX_CONTAINERS, SUBTITLE_INPUTS
 from modules.backends import BACKENDS, TranscribeCallbacks, StoppedError, find_whisper_cli, faster_whisper_available
 from utils.ffmpeg_utils import (find_ffmpeg, probe_duration, probe_fps, extract_audio, mux_subtitles,
                                burn_subtitles, has_video)
@@ -302,8 +302,11 @@ class _Worker(QThread):
             if s.get("sync_mode") == "resync":
                 sub_path = self._resync_source(src, s)
                 self.status.emit(f"Aligning {os.path.basename(sub_path)} to the audio…")
+                # MicroDVD holds frame numbers: unless the file declares its own rate, the video's is
+                # the one it was written against
+                sub_fps = probe_fps(src) if sub_path.lower().endswith(".sub") else None
                 with open(sub_path, encoding="utf-8", errors="replace") as fh:
-                    cues = parse_subtitles(fh.read())
+                    cues = parse_subtitles(fh.read(), sub_fps)
                 if not cues:
                     raise RuntimeError(f"No cues found in {sub_path}")
                 segments, report = resync_cues(cues, segments, bool(s.get("resync_fit_speed", True)))
@@ -473,14 +476,15 @@ class _Worker(QThread):
         stem = os.path.splitext(src)[0]
         folder = os.path.dirname(src) or "."
         base = os.path.basename(stem)
-        candidates = [f"{stem}.srt", f"{stem}.vtt"]
+        candidates = [f"{stem}{ext}" for ext in SUBTITLE_INPUTS]
         for fn in sorted(os.listdir(folder)):
-            if fn.startswith(base + ".") and fn.lower().endswith((".srt", ".vtt")) and not fn.endswith(".synced.srt"):
+            # ".synced." is our own output from a previous run: resyncing it would align it twice
+            if fn.startswith(base + ".") and fn.lower().endswith(SUBTITLE_INPUTS) and ".synced." not in fn:
                 candidates.append(os.path.join(folder, fn))
         for c in candidates:
             if os.path.isfile(c):
                 return c
-        raise FileNotFoundError(f"No .srt / .vtt next to {os.path.basename(src)} to resync "
+        raise FileNotFoundError(f"No {' / '.join(SUBTITLE_INPUTS)} next to {os.path.basename(src)} to resync "
                                 "(set the file on the Sync tab)")
 
     def _set_process(self, proc):
